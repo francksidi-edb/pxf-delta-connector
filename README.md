@@ -27,41 +27,10 @@ gpadmin@gpmaster:~/pxf/conf$ mvn --version
 ###4 - to compile and package 
 gpadmin@gpmaster:~/pxf/pxf-delta-connector$ mvn clean package 
 
-[INFO] 
-[INFO] ------------------< com.example:pxf-delta-connector >-------------------
-[INFO] Building pxf-delta-connector 1.0-SNAPSHOT
-[INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
-[INFO] --- maven-clean-plugin:2.5:clean (default-clean) @ pxf-delta-connector ---
-[INFO] Deleting /home/gpadmin/pxf/pxf-delta-connector/target
-[INFO] 
-[INFO] --- maven-resources-plugin:2.6:resources (default-resources) @ pxf-delta-connector ---
-[WARNING] Using platform encoding (UTF-8 actually) to copy filtered resources, i.e. build is platform dependent!
-[INFO] skip non existing resourceDirectory /home/gpadmin/pxf/pxf-delta-connector/src/main/resources
-[INFO] 
-[INFO] --- maven-compiler-plugin:3.8.1:compile (default-compile) @ pxf-delta-connector ---
-[INFO] Changes detected - recompiling the module!
-[WARNING] File encoding has not been set, using platform encoding UTF-8, i.e. build is platform dependent!
-[INFO] Compiling 5 source files to /home/gpadmin/pxf/pxf-delta-connector/target/classes
-[INFO] 
-[INFO] --- maven-resources-plugin:2.6:testResources (default-testResources) @ pxf-delta-connector ---
-[WARNING] Using platform encoding (UTF-8 actually) to copy filtered resources, i.e. build is platform dependent!
-[INFO] skip non existing resourceDirectory /home/gpadmin/pxf/pxf-delta-connector/src/test/resources
-[INFO] 
-[INFO] --- maven-compiler-plugin:3.8.1:testCompile (default-testCompile) @ pxf-delta-connector ---
-[INFO] No sources to compile
-[INFO] 
-[INFO] --- maven-surefire-plugin:2.12.4:test (default-test) @ pxf-delta-connector ---
-[INFO] No tests to run.
-[INFO] 
+
 [INFO] --- maven-jar-plugin:3.2.0:jar (default-jar) @ pxf-delta-connector ---
 [INFO] Building jar: /home/gpadmin/pxf/pxf-delta-connector/target/pxf-delta-connector-1.0-SNAPSHOT.jar
-[INFO] ------------------------------------------------------------------------
-[INFO] BUILD SUCCESS
-[INFO] ------------------------------------------------------------------------
-[INFO] Total time:  1.384 s
-[INFO] Finished at: 2024-12-29T13:39:49Z
-[INFO] ------------------------------------------------------------------------
+
 gpadmin@gpmaster:~/pxf/pxf-delta-connector$ 
 
 ###5 - To deploy the jar. The script will stop PXF, copy the package, remove all logs and start again PXF
