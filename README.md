@@ -18,7 +18,6 @@
 
 
 
-
 ###3 - Maveen need to be installed 
 
 gpadmin@gpmaster:~/pxf/conf$ mvn --version 
