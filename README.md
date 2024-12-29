@@ -61,5 +61,39 @@ PXF stopped successfully on 1 out of 1 host
 Starting PXF on coordinator host and 0 segment hosts...
 PXF started successfully on 1 out of 1 host
 
+### Step 6 - Connect to Greenplum and Create an External Table
+
+1. Drop the external table if it already exists:
+   ```sql
+   warehouse=# DROP EXTERNAL TABLE ext_transactions_d;
+
+warehouse=# CREATE EXTERNAL TABLE ext_transactions_d (
+    transaction_id   BIGINT,
+    user_id          BIGINT,
+    merchant_id      BIGINT,
+    product_id       BIGINT,
+    transaction_date VARCHAR(10), -- Treat as VARCHAR to avoid type mismatch
+    amount           NUMERIC(10,2),
+    loyalty_points   INTEGER,
+    payment_method   VARCHAR(50)
+)
+LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
+FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+
+warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
+
+ transaction_id | user_id | merchant_id | product_id | transaction_date |  amount  | loyalty_points | payment_method 
+----------------+---------+-------------+------------+------------------+----------+----------------+----------------
+      368124443 | 7671444 |      502842 |     211955 | 2024-02-07       | 44263.00 |             82 | Mobile Pay
+      368190215 | 5187904 |      589170 |     234751 | 2024-02-24       | 71045.00 |              3 | Mobile Pay
+      368192222 | 6893445 |      270994 |     352707 | 2024-02-02       | 55530.00 |             55 | Debit Card
+      368095715 | 8686145 |      599271 |      31717 | 2024-02-10       | 19731.00 |             65 | Credit Card
+      368095971 | 1984538 |      198938 |     395405 | 2024-02-07       | 82284.00 |             77 | Mobile Pay
+      368072689 | 7294881 |      822620 |      15519 | 2024-02-19       | 88835.00 |             89 | Credit Card
+      368074678 | 3514583 |      175076 |     380181 | 2024-02-26       |  2392.00 |             68 | Credit Card
+      368146928 | 2506668 |      309160 |     446281 | 2024-02-15       | 19122.00 |             76 | Debit Card
+      368219332 | 4141167 |      228490 |      21146 | 2024-02-04       | 32496.00 |             13 | Credit Card
+      368219537 | 9928407 |      972353 |     299168 | 2024-02-17       | 52130.00 |             39 | Debit Card
+
 
 
