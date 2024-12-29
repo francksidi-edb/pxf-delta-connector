@@ -68,6 +68,7 @@ PXF started successfully on 1 out of 1 host
 1. Drop the external table if it already exists:
    ```sql
    warehouse=# DROP EXTERNAL TABLE ext_transactions_d;
+   ```
 
 warehouse=# CREATE EXTERNAL TABLE ext_transactions_d (
     transaction_id   BIGINT,
@@ -82,6 +83,7 @@ warehouse=# CREATE EXTERNAL TABLE ext_transactions_d (
 LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
 FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
 
+```
 warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
 
  transaction_id | user_id | merchant_id | product_id | transaction_date |  amount  | loyalty_points | payment_method 
