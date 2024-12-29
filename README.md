@@ -89,6 +89,7 @@ LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
 FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
 
 ```
+```sql
 warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
 
  transaction_id | user_id | merchant_id | product_id | transaction_date |  amount  | loyalty_points | payment_method 
@@ -105,4 +106,4 @@ warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
       368219537 | 9928407 |      972353 |     299168 | 2024-02-17       | 52130.00 |             39 | Debit Card
 
 
-
+```
