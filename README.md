@@ -1,9 +1,9 @@
 # pxf-delta-connector
 ## First release of the Delta Connector. Next phase will be to include Vectorization and predicate/aggregate/joins pushdown
 
-1 - Greenplum and PXF Extension need to be installed 
+###1 - Greenplum and PXF Extension need to be installed 
 
-2 - Inside pxf-profiles.xml in $PXF_BASE/conf add the following lines
+###2 - Inside pxf-profiles.xml in $PXF_BASE/conf add the following lines
 
 
 <profiles>
@@ -19,18 +19,12 @@
 
 
 
-3 - Maveen need to be installed 
+###3 - Maveen need to be installed 
 
 gpadmin@gpmaster:~/pxf/conf$ mvn --version 
-Apache Maven 3.8.7
-Maven home: /usr/share/maven
-Java version: 17.0.13, vendor: Debian, runtime: /usr/lib/jvm/java-17-openjdk-amd64
-Default locale: en, platform encoding: UTF-8
-OS name: "linux", version: "6.1.0-23-cloud-amd64", arch: "amd64", family: "unix"
-gpadmin@gpmaster:~/pxf/conf$ 
 
 
-4 - to compile and package 
+###4 - to compile and package 
 gpadmin@gpmaster:~/pxf/pxf-delta-connector$ mvn clean package 
 
 [INFO] 
@@ -70,14 +64,14 @@ gpadmin@gpmaster:~/pxf/pxf-delta-connector$ mvn clean package
 [INFO] ------------------------------------------------------------------------
 gpadmin@gpmaster:~/pxf/pxf-delta-connector$ 
 
-5 - To deploy the jar. The script will stop PXF, copy the package, remove all logs and start again PXF
+###5 - To deploy the jar. The script will stop PXF, copy the package, remove all logs and start again PXF
 gpadmin@gpmaster:~/pxf/pxf-delta-connector$ ./deploy.sh 
 Stopping PXF on coordinator host and 0 segment hosts...
 PXF stopped successfully on 1 out of 1 host
 Starting PXF on coordinator host and 0 segment hosts...
 PXF started successfully on 1 out of 1 host
 
-6 - Connect to Greenplum and create an external Table 
+###6 - Connect to Greenplum and create an external Table 
 
 warehouse=# drop external table ext_transactions_d;
 DROP FOREIGN TABLE
