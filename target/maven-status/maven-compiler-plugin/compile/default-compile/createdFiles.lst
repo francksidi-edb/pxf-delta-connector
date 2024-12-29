@@ -1,0 +1,6 @@
+com/example/pxf/DeltaTableResolver.class
+com/example/pxf/DeltaTableAccessor.class
+com/example/pxf/CustomRowRecord.class
+com/example/pxf/partitioning/DeltaFragmentMetadata.class
+com/example/pxf/DeltaTableResolver$1.class
+com/example/pxf/DeltaTableFragmenter.class
