@@ -70,15 +70,20 @@ PXF started successfully on 1 out of 1 host
    warehouse=# DROP EXTERNAL TABLE ext_transactions_d;
    ```
 
-warehouse=# CREATE EXTERNAL TABLE ext_transactions_d (
-    transaction_id   BIGINT,
-    user_id          BIGINT,
-    merchant_id      BIGINT,
-    product_id       BIGINT,
-    transaction_date VARCHAR(10), -- Treat as VARCHAR to avoid type mismatch
-    amount           NUMERIC(10,2),
-    loyalty_points   INTEGER,
-    payment_method   VARCHAR(50)
+### Create External Table
+
+Use the following SQL command to create the external table:
+
+```sql
+CREATE EXTERNAL TABLE ext_transactions_d (
+    transaction_id   BIGINT,            -- Unique transaction identifier
+    user_id          BIGINT,            -- User identifier
+    merchant_id      BIGINT,            -- Merchant identifier
+    product_id       BIGINT,            -- Product identifier
+    transaction_date VARCHAR(10),       -- Transaction date as a string (to avoid type mismatch)
+    amount           NUMERIC(10,2),     -- Transaction amount
+    loyalty_points   INTEGER,           -- Loyalty points earned
+    payment_method   VARCHAR(50)        -- Payment method used
 )
 LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
 FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
