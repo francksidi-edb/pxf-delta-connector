@@ -26,6 +26,7 @@ Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the De
         </plugins>
     </profile>
 </profiles>
+```
 
 ### 3. Install Maven
 Ensure Maven is installed on your system. You can check your Maven installation and
@@ -41,7 +42,7 @@ Use Maven to clean and build the project into a JAR file.
 [INFO] --- maven-jar-plugin:3.2.0:jar (default-jar) @ pxf-delta-connector ---
 [INFO] Building jar: /home/gpadmin/pxf/pxf-delta-connector/target/pxf-delta-connector-1.0-SNAPSHOT.jar
 
-
+```
 ### 5. Deploy the JAR File
 
 To deploy the JAR file, use the `deploy.sh` script. This script will:
@@ -61,6 +62,7 @@ PXF stopped successfully on 1 out of 1 host
 Starting PXF on coordinator host and 0 segment hosts...
 PXF started successfully on 1 out of 1 host
 
+```
 ### Step 6 - Connect to Greenplum and Create an External Table
 
 1. Drop the external table if it already exists:
