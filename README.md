@@ -3,8 +3,7 @@
 
 ###1 - Greenplum and PXF Extension need to be installed 
 
-###2 - Inside pxf-profiles.xml in $PXF_BASE/conf add the following lines
-
+###2 - Update pxf-profiles.xml. the file is located inside $PXF_BASE/conf
 
 <profiles>
 	<profile>
@@ -16,6 +15,7 @@
         </plugins>
     </profile>
 </profiles>
+
 
 
 
