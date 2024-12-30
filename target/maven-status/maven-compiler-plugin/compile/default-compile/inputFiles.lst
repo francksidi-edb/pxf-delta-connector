@@ -2,4 +2,6 @@
 /home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/CustomRowRecord.java
 /home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/partitioning/DeltaFragmentMetadata.java
 /home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/DeltaTableResolver.java
+/home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/DeltaTableResolverVec.java
 /home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/DeltaTableAccessor.java
+/home/gpadmin/pxf/pxf-delta-connector/src/main/java/com/example/pxf/DeltaTableAccessorVec.java
