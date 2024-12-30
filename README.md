@@ -95,7 +95,7 @@ CREATE EXTERNAL TABLE ext_transactions_d (
 LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
 FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
 
-Use the following SQL command to create the external table without Vectorization
+Use the following SQL command to create the external table with Vectorization
 
 ```sql
 CREATE EXTERNAL TABLE ext_transactions_v_4096 (
