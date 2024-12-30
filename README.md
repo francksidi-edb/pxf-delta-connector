@@ -1,8 +1,7 @@
 # PXF Delta Connector
 
 ## Overview
-This is the first release of the Delta Connector for PXF. The next phase will include:
-- Vectorization
+This is the first release of the Delta Connector for PXF. The next phase will include
 - Predicate/aggregate/joins pushdown
 
 ---
@@ -13,7 +12,7 @@ This is the first release of the Delta Connector for PXF. The next phase will in
 - **Greenplum Database** and **PXF Extension** must be installed.
 
 ### 2. Update PXF Profiles
-Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the Delta Connector profile.
+Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the Delta Connector profile without and with Vectorization
 
 ```xml
 <profiles>
@@ -23,6 +22,14 @@ Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the De
             <fragmenter>com.example.pxf.DeltaTableFragmenter</fragmenter>
             <accessor>com.example.pxf.DeltaTableAccessor</accessor>
             <resolver>com.example.pxf.DeltaTableResolver</resolver>
+        </plugins>
+    </profile>
+ <profile>
+        <name>deltavec</name>
+        <plugins>
+            <fragmenter>com.example.pxf.DeltaTableFragmenter</fragmenter>
+            <accessor>com.example.pxf.DeltaTableAccessorVec</accessor>
+            <resolver>com.example.pxf.DeltaTableResolverVec</resolver>
         </plugins>
     </profile>
 </profiles>
@@ -70,9 +77,9 @@ PXF started successfully on 1 out of 1 host
    warehouse=# DROP EXTERNAL TABLE ext_transactions_d;
    ```
 
-### Create External Table
+### Create External Table 
 
-Use the following SQL command to create the external table:
+Use the following SQL command to create the external table without Vectorization
 
 ```sql
 CREATE EXTERNAL TABLE ext_transactions_d (
@@ -86,6 +93,22 @@ CREATE EXTERNAL TABLE ext_transactions_d (
     payment_method   VARCHAR(50)        -- Payment method used
 )
 LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=delta')
+FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+
+Use the following SQL command to create the external table without Vectorization
+
+```sql
+CREATE EXTERNAL TABLE ext_transactions_v_4096 (
+    transaction_id   BIGINT,            -- Unique transaction identifier
+    user_id          BIGINT,            -- User identifier
+    merchant_id      BIGINT,            -- Merchant identifier
+    product_id       BIGINT,            -- Product identifier
+    transaction_date VARCHAR(10),       -- Transaction date as a string (to avoid type mismatch)
+    amount           NUMERIC(10,2),     -- Transaction amount
+    loyalty_points   INTEGER,           -- Loyalty points earned
+    payment_method   VARCHAR(50)        -- Payment method used
+)
+LOCATION ('pxf:///mnt/data/parquet/transactions?PROFILE=deltavec'&batch_size=4096)
 FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
 
 ```
@@ -104,6 +127,39 @@ warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
       368146928 | 2506668 |      309160 |     446281 | 2024-02-15       | 19122.00 |             76 | Debit Card
       368219332 | 4141167 |      228490 |      21146 | 2024-02-04       | 32496.00 |             13 | Credit Card
       368219537 | 9928407 |      972353 |     299168 | 2024-02-17       | 52130.00 |             39 | Debit Card
+
+
+warehouse=# drop external table ext_delta_merchants_v_4096;
+DROP FOREIGN TABLE
+warehouse=# CREATE EXTERNAL TABLE ext_delta_merchants_v_4096 ( merchant_id BIGINT,
+    merchant_name TEXT,
+    merchant_category TEXT,
+    location TEXT
+)
+LOCATION ('pxf:///mnt/data/parquet/merchants?PROFILE=deltavec&batch_size=4096') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+CREATE EXTERNAL TABLE
+warehouse=# select * from ext_delta_merchants_v_4096 limit 10;
+ merchant_id | merchant_name | merchant_category | location 
+-------------+---------------+-------------------+----------
+           7 | merchant_7    | Grocery           | City_B
+          12 | merchant_12   | Travel            | City_B
+          28 | merchant_28   | Retail            | City_D
+          43 | merchant_43   | Retail            | City_C
+          54 | merchant_54   | Travel            | City_D
+          74 | merchant_74   | Electronics       | City_B
+          92 | merchant_92   | Travel            | City_B
+          97 | merchant_97   | Grocery           | City_D
+          98 | merchant_98   | Retail            | City_C
+         101 | merchant_101  | Dining            | City_A
+(10 rows)
+
+warehouse=# \timing 
+Timing is on.
+warehouse=# select count(*) from ext_delta_merchants_v_4096;
+  count  
+---------
+ 1000000
+(1 row)
 
 
 ```
