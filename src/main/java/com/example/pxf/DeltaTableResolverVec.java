@@ -36,6 +36,24 @@ import java.util.HashMap;
 import java.util.stream.IntStream;
 import java.util.Arrays; // Add this import
 import java.util.stream.Collectors; // Add this import
+				    //
+import org.greenplum.pxf.api.filter.FilterParser;
+import io.delta.standalone.expressions.Expression;
+import org.greenplum.pxf.api.filter.ColumnPredicateBuilder;
+import io.delta.standalone.actions.AddFile;
+
+import org.greenplum.pxf.api.filter.OperandNode;
+import org.greenplum.pxf.api.filter.OperatorNode;
+import org.greenplum.pxf.api.filter.Node;
+import java.util.function.Predicate;
+
+import io.delta.standalone.expressions.Expression;
+import io.delta.standalone.expressions.EqualTo;
+import io.delta.standalone.expressions.And;
+import io.delta.standalone.expressions.Or;
+import io.delta.standalone.expressions.Column;
+import io.delta.standalone.expressions.Literal;
+
 
 
 /**
@@ -56,6 +74,7 @@ public class DeltaTableResolverVec implements ReadVectorizedResolver, Resolver {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private Map<String, StructField> fieldMap; // Add this field
 
+    private Expression filterExpression; // Add this field for filtering rows
 
 
 private void initializeFieldMap() {
@@ -162,6 +181,22 @@ public void afterPropertiesSet() {
                 throw new IllegalStateException("Schema is null. Ensure the Delta table has valid metadata.");
             }
 
+
+	    String filterString = context.getFilterString();
+
+            if (filterString != null && !filterString.isEmpty()) {
+	        LOG.info("Filter Passed: " + filterString);
+		FilterParser filterParser = new FilterParser();
+                Node filterNode = filterParser.parse(filterString);
+
+            // Build Delta Expression from the parsed filterNode
+               PredicateBuilder predicateBuilder = new PredicateBuilder(schema);
+               filterExpression = predicateBuilder.buildExpression((OperatorNode) filterNode);
+	       LOG.info("Expression Built: " + filterExpression.toString());
+	    }
+	    else 
+	       LOG.info("Expression is empty");
+
             LOG.info("Schema successfully loaded: " + schema.getTreeString());
 	    initializeFieldMap();
             LOG.info("Initializing FieldMap with batchsize of" + batchSize);
@@ -171,32 +206,6 @@ public void afterPropertiesSet() {
         }
     }
 
-/*
-@Override
-public List<List<OneField>> getFieldsForBatch(OneRow batch) {
-    if (schema == null) {
-        throw new IllegalStateException("Schema is not initialized. Check Delta table metadata.");
-    }
-
-    Object rowData = batch.getData();
-    LOG.info("Batch data type: " + (rowData != null ? rowData.getClass().getName() : "null"));
-    LOG.info("Batch data content: " + rowData);
-
-    if (!(rowData instanceof List)) {
-        throw new IllegalArgumentException("Batch data type is not supported: " + (rowData != null ? rowData.getClass().getName() : "null"));
-    }
-
-    List<List<OneField>> resolvedBatch = new ArrayList<>();
-    @SuppressWarnings("unchecked")
-    List<RowRecord> records = (List<RowRecord>) rowData;
-
-    for (RowRecord record : records) {
-        resolvedBatch.add(processRecord(record));
-    }
-
-    return resolvedBatch;
-}
-*/
 
 
 @Override
@@ -214,22 +223,44 @@ public List<List<OneField>> getFieldsForBatch(OneRow batch) {
     @SuppressWarnings("unchecked")
     List<RowRecord> records = (List<RowRecord>) rowData;
 
-    LOG.info(String.format("Processing batch of %d rows", records.size()));
+    //LOG.info(String.format("Processing batch of %d rows", records.size()));
 
     final Instant start = Instant.now();
 
-    // Pre-allocate memory for the batch
     List<List<OneField>> resolvedBatch = new ArrayList<>(records.size());
+    int filteredCount = 0;
 
     for (RowRecord record : records) {
-        resolvedBatch.add(processRecord(record));
+        // Evaluate the expression for the current record
+        if (filterExpression == null || evaluateExpression(filterExpression, record)) {
+            resolvedBatch.add(processRecord(record));
+        } else {
+		filteredCount++;
+        }
     }
+/*
+    final long elapsedNanos = Duration.between(start, Instant.now()).toMillis();
+    LOG.info(String.format("Processed batch of %d rows in %d milliseconds", resolvedBatch.size(), elapsedNanos));
+     LOG.info(String.format("Filtered out %d rows that did not match the criteria", filteredCount));
 
-    final long elapsedNanos = Duration.between(start, Instant.now()).toNanos();
-    LOG.info(String.format("Processed batch of %d rows in %d nanoseconds", records.size(), elapsedNanos));
+*/
 
     return resolvedBatch;
 }
+
+
+private boolean evaluateExpression(Expression expression, RowRecord record) {
+    // Use the eval method to evaluate the expression directly on the RowRecord
+    Object result = expression.eval(record);
+
+    // Ensure the result is a boolean for logical expressions like EqualTo
+    if (result instanceof Boolean) {
+        return (Boolean) result;
+    }
+
+    throw new UnsupportedOperationException("Expression evaluation resulted in non-boolean value: " + result);
+}
+
 
 
 private List<OneField> processRecord(RowRecord record) {
@@ -366,5 +397,4 @@ private String convertToJson(String rowData) {
 }
 
 }
-
 

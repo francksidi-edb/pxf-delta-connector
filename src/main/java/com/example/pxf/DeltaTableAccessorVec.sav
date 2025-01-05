@@ -42,13 +42,6 @@ import org.greenplum.pxf.api.filter.OperatorNode;
 import org.greenplum.pxf.api.filter.Node;
 import java.util.function.Predicate;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
-import io.delta.standalone.expressions.EqualTo;
-import io.delta.standalone.expressions.And;
-import io.delta.standalone.expressions.Or;
-
 
 
 
@@ -81,6 +74,62 @@ private Object filterValue;
     }
     throw new IllegalArgumentException("Invalid column index: " + columnIndex);
 }
+/*
+
+    @Override
+    public boolean openForRead() {
+        try {
+            String deltaTablePath = context.getDataSource();
+            LOG.info("Opening DeltaLog for table path: " + deltaTablePath);
+
+            Configuration hadoopConf = initializeHadoopConfiguration();
+            deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
+            snapshot = deltaLog.snapshot();
+	    DeltaScan scan;
+            schema = snapshot.getMetadata().getSchema();
+            fields = List.of(schema.getFields());
+
+	    // Get batch size from context or use default
+	    String batchSizeParam = context.getOption("batch_size");
+    batchSize = (batchSizeParam != null) ? Integer.parseInt(batchSizeParam) : DEFAULT_BATCH_SIZE;
+        LOG.info("Batch size set to: " + batchSize);
+	// Calculate and log the total rows in the Delta table
+	// Handle predicate pushdown if filters are provided
+        String filterString = context.getFilterString();
+
+        if (filterString != null && !filterString.isEmpty()) {
+	        LOG.info("Filter Passed: " + filterString);
+		FilterParser filterParser = new FilterParser();
+            Node filterNode = filterParser.parse(filterString);
+
+            // Build Delta Expression from the parsed filterNode
+            PredicateBuilder predicateBuilder = new PredicateBuilder(schema);
+            Expression deltaExpression = predicateBuilder.buildExpression((OperatorNode) filterNode);
+	        LOG.info("Expression Built: " + deltaExpression.toString());
+	    scan = snapshot.scan(deltaExpression);
+
+	    }
+
+        else {
+            LOG.info("No filter condition provided.");
+	    scan = snapshot.scan();
+        }
+
+	     List<AddFile> files = collectFiles(scan.getFiles());
+    fileIterator = files.stream()
+                        .map(AddFile::getPath)
+                        .iterator();
+
+    	    LOG.info("Number of files to process: " + files.size());
+
+            LOG.info("Delta table opened successfully for reading.");
+            return openNextFile(); // Open the first file for reading rows
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error opening Delta table for reading", e);
+            return false;
+        }
+    }
+*/
 
 @Override
 public boolean openForRead() {
@@ -94,9 +143,6 @@ public boolean openForRead() {
         schema = snapshot.getMetadata().getSchema();
         fields = List.of(schema.getFields());
 
-        LOG.info("Snapshot version: " + snapshot.getVersion());
-        LOG.info("Schema fields: " + fields);
-
         // Log partition columns
         List<String> partitionColumns = snapshot.getMetadata().getPartitionColumns();
         LOG.info("Partition Columns: " + partitionColumns);
@@ -106,197 +152,48 @@ public boolean openForRead() {
         batchSize = (batchSizeParam != null) ? Integer.parseInt(batchSizeParam) : DEFAULT_BATCH_SIZE;
         LOG.info("Batch size set to: " + batchSize);
 
-
-	/*
-
         // Handle predicate pushdown
-        final Expression deltaExpression = (context.getFilterString() != null && !context.getFilterString().isEmpty())
-                ? buildDeltaExpression(context.getFilterString())
-                : null;
+        String filterString = context.getFilterString();
+        DeltaScan scan;
 
-        if (deltaExpression != null) {
+        if (filterString != null && !filterString.isEmpty()) {
+            LOG.info("Filter Passed: " + filterString);
+
+            FilterParser filterParser = new FilterParser();
+            Node filterNode = filterParser.parse(filterString);
+
+            PredicateBuilder predicateBuilder = new PredicateBuilder(schema);
+            Expression deltaExpression = predicateBuilder.buildExpression((OperatorNode) filterNode);
             LOG.info("Expression Built: " + deltaExpression.toString());
+
+            scan = snapshot.scan(deltaExpression);
         } else {
             LOG.info("No filter condition provided.");
+            scan = snapshot.scan();
         }
-	*/
 
-        // Collect and prune files based on filter expression
-        List<AddFile> files = snapshot.getAllFiles();
-        LOG.info("Total files in snapshot: " + files.size());
+        // Collect files and log partition values
+        List<AddFile> files = collectFiles(scan.getFiles());
 
-	/*
-        List<AddFile> prunedFiles = files.stream()
-                .filter(file -> shouldIncludeFile(file, deltaExpression)) // Use deltaExpression
-                .collect(Collectors.toList());
-
-        LOG.info("Files after pruning: " + prunedFiles.size());
-	
-
-        // Log details of pruned files
-        for (AddFile addFile : prunedFiles) {
+        for (AddFile addFile : files) {
             Map<String, String> partitionValues = addFile.getPartitionValues();
-            LOG.info("File: " + addFile.getPath() + ", Partition Values: " + partitionValues);
+            LOG.info("File: " + addFile.getPath() + " Partition Values: " + partitionValues);
         }
 
-        fileIterator = prunedFiles.stream()
-                .map(AddFile::getPath)
-                .iterator();
+        fileIterator = files.stream()
+                            .map(AddFile::getPath)
+                            .iterator();
 
+        LOG.info("Number of files to process: " + files.size());
         LOG.info("Delta table opened successfully for reading.");
         return openNextFile();
-*/
-	 fileIterator = snapshot.getAllFiles().stream()
-                    .map(file -> file.getPath())
-                    .collect(Collectors.toList())
-                    .iterator();
-
-            LOG.info("Delta table opened successfully for reading.");
-            return openNextFile(); // Open the first file for reading rows
-
-
     } catch (Exception e) {
         LOG.log(Level.SEVERE, "Error opening Delta table for reading", e);
         return false;
     }
 }
 
-private Expression buildDeltaExpression(String filterString) {
-    try {
-        FilterParser filterParser = new FilterParser();
-        Node filterNode = filterParser.parse(filterString);
 
-        PredicateBuilder predicateBuilder = new PredicateBuilder(schema);
-        return predicateBuilder.buildExpression((OperatorNode) filterNode);
-    } catch (Exception e) {
-        LOG.log(Level.SEVERE, "Error building Delta Expression from filter", e);
-        throw new RuntimeException("Failed to build Delta Expression", e);
-    }
-}
-
-
-private String normalizeColumnName(String columnName) {
-    if (columnName.startsWith("Column(") && columnName.endsWith(")")) {
-        return columnName.substring(7, columnName.length() - 1); // Extracts the name inside "Column(...)"
-    }
-    return columnName;
-}
-
-
-/**
- * Safely cast an object to Comparable.
- *
- * @param value the object to cast
- * @return the casted Comparable object
- * @throws ClassCastException if the object is not a Comparable
- */
-private Comparable<Object> castToComparable(Object value) {
-    if (value instanceof Comparable) {
-        return (Comparable<Object>) value;
-    }
-    throw new ClassCastException("Value is not comparable: " + value);
-}
-
-private <T extends Comparable<T>> boolean evaluateFilterAgainstStats(
-        Expression filterExpression,
-        Map<String, Object> minValues,
-        Map<String, Object> maxValues
-) {
-    if (filterExpression == null) {
-        return true; // No filter, include all files
-    }
-
-    if (filterExpression instanceof EqualTo) {
-        EqualTo equalTo = (EqualTo) filterExpression;
-
-        String columnName = equalTo.children().get(0).toString(); // Column name
-        Object value = equalTo.children().get(1).eval(null); // Literal value
-
-	String normalizedColumnName = normalizeColumnName(columnName);
-
-        // Get min and max values for the column
-        Object minValue = minValues.get(normalizedColumnName);
-        Object maxValue = maxValues.get(normalizedColumnName);
-
-        if (minValue == null || maxValue == null || value == null) {
-            LOG.info(String.format(
-                "Skipping evaluation due to null values: Column=%s, Min=%s, Max=%s, Value=%s",
-                normalizedColumnName, minValue, maxValue, value
-            ));
-            return false; // Cannot evaluate
-        }
-
-        // Normalize values
-        T normalizedValue = normalizeValue(value);
-        T normalizedMinValue = normalizeValue(minValue);
-        T normalizedMaxValue = normalizeValue(maxValue);
-
-        // Perform comparison
-        return normalizedMinValue.compareTo(normalizedValue) <= 0 &&
-               normalizedMaxValue.compareTo(normalizedValue) >= 0;
-
-    } else if (filterExpression instanceof And) {
-        And and = (And) filterExpression;
-        return evaluateFilterAgainstStats(and.children().get(0), minValues, maxValues) &&
-               evaluateFilterAgainstStats(and.children().get(1), minValues, maxValues);
-
-    } else if (filterExpression instanceof Or) {
-        Or or = (Or) filterExpression;
-        return evaluateFilterAgainstStats(or.children().get(0), minValues, maxValues) ||
-               evaluateFilterAgainstStats(or.children().get(1), minValues, maxValues);
-    }
-
-    throw new UnsupportedOperationException("Unsupported filter expression: " + filterExpression.toString());
-}
-
-@SuppressWarnings("unchecked")
-private <T extends Comparable<T>> T normalizeValue(Object value) {
-    if (value instanceof Integer) {
-        return (T) Long.valueOf(((Integer) value).longValue()); // Convert Integer to Long
-    } else if (value instanceof Long) {
-        return (T) value; // Long is already Comparable
-    } else if (value instanceof Double) {
-        return (T) value; // Double is already Comparable
-    } else if (value instanceof String) {
-        return (T) value; // String is naturally Comparable
-    } else if (value instanceof java.sql.Date || value instanceof java.util.Date) {
-        return (T) Long.valueOf(((java.util.Date) value).getTime()); // Convert Date to timestamp (Long)
-    } else if (value instanceof java.time.LocalDate) {
-        return (T) Long.valueOf(java.sql.Date.valueOf((java.time.LocalDate) value).getTime()); // Convert LocalDate to timestamp
-    } else {
-        throw new IllegalArgumentException("Unsupported value type: " + (value != null ? value.getClass().getName() : "null"));
-    }
-}
-
-
-private boolean shouldIncludeFile(AddFile file, Expression deltaExpression) {
-    if (deltaExpression == null) {
-        return true; // No filter, include all files
-    }
-
-    try {
-        String stats = file.getStats();
-        if (stats == null || stats.isEmpty()) {
-            LOG.info("File: " + file.getPath() + " has no statistics, including by default.");
-            return true;
-        }
-
-        // Parse min and max values from file statistics
-        Map<String, Object> minValues = extractMinValues(stats);
-        Map<String, Object> maxValues = extractMaxValues(stats);
-
-        LOG.info("File: " + file.getPath() + " Min Values: " + minValues);
-        LOG.info("File: " + file.getPath() + " Max Values: " + maxValues);
-
-        // Evaluate the filter against the statistics
-        boolean result = evaluateFilterAgainstStats(deltaExpression, minValues, maxValues);
-        LOG.info("File: " + file.getPath() + " matches filter: " + result);
-        return result;
-    } catch (Exception e) {
-        LOG.log(Level.SEVERE, "Error evaluating filter for file: " + file.getPath(), e);
-        return false; // Exclude the file if there's an error
-    }
-}
 
 
 private List<AddFile> collectFiles(CloseableIterator<AddFile> iterator) {
@@ -336,6 +233,24 @@ private List<AddFile> collectFiles(CloseableIterator<AddFile> iterator) {
     return false; // No more files to process
 }
 
+/*
+    @Override
+    public OneRow readNextObject() {
+        try {
+            if (rowIterator != null && rowIterator.hasNext()) {
+                RowRecord row = rowIterator.next();
+                return new OneRow(null, extractRowValues(row, fields));
+            } else if (openNextFile()) {
+                return readNextObject(); // Recursively process the next file
+            }
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error reading next object", e);
+        }
+        return null;
+    }
+*/
+
+
 @Override
 public OneRow readNextObject() {
     try {
@@ -348,14 +263,13 @@ public OneRow readNextObject() {
         }
 
         if (!batch.isEmpty()) {
-            //final long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
-            //LOG.info(String.format("Read batch of %d rows in %d milliseconds", batch.size(), elapsedMillis));
+            final long elapsedNanos = Duration.between(start, Instant.now()).toMillis();
+            LOG.info(String.format("Read batch of %d rows in %d milliseconds", batch.size(), elapsedNanos));
             return new OneRow(null, batch); // Return the batch
         }
 
         // If no rows are left in the current file, move to the next file
         if (openNextFile()) {
-            LOG.info("Switching to the next file for processing.");
             return readNextObject(); // Recursive call to process the next file
         }
     } catch (Exception e) {
@@ -364,6 +278,7 @@ public OneRow readNextObject() {
 
     return null; // No more data available
 }
+
 
 
     @Override
@@ -383,19 +298,6 @@ public OneRow readNextObject() {
         rowIterator = null;
     }
 }
-
-private Map<String, Object> extractMinValues(String stats) throws IOException {
-    ObjectMapper objectMapper = new ObjectMapper();
-    JsonNode statsNode = objectMapper.readTree(stats);
-    return objectMapper.convertValue(statsNode.get("minValues"), new TypeReference<Map<String, Object>>() {});
-}
-
-private Map<String, Object> extractMaxValues(String stats) throws IOException {
-    ObjectMapper objectMapper = new ObjectMapper();
-    JsonNode statsNode = objectMapper.readTree(stats);
-    return objectMapper.convertValue(statsNode.get("maxValues"), new TypeReference<Map<String, Object>>() {});
-}
-
 
     @Override
     public boolean openForWrite() {
