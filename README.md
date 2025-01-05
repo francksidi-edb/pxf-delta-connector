@@ -26,6 +26,18 @@ Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the De
         </plugins>
     </profile>
 </profiles>
+
+	<profile>
+        <name>deltavec</name>
+        <plugins>
+            <fragmenter>com.example.pxf.DeltaPartitionFragmenter</fragmenter>
+	    <accessor>com.example.pxf.DeltaTableVectorizedAccessor</accessor>
+	    <resolver>com.example.pxf.DeltaTableVectorizedResolver</resolver>
+        </plugins>
+</profile>
+
+
+
 ```
 
 ### 3. Install Maven
@@ -104,6 +116,39 @@ warehouse=# SELECT * FROM ext_transactions_d LIMIT 10;
       368146928 | 2506668 |      309160 |     446281 | 2024-02-15       | 19122.00 |             76 | Debit Card
       368219332 | 4141167 |      228490 |      21146 | 2024-02-04       | 32496.00 |             13 | Credit Card
       368219537 | 9928407 |      972353 |     299168 | 2024-02-17       | 52130.00 |             39 | Debit Card
+
+
+```
+```sql
+CREATE EXTERNAL TABLE ext_users_delta (
+ user_id BIGINT,
+    user_name VARCHAR(255),
+    age INTEGER ,
+    region VARCHAR(50),
+    signup_date DATE
+)
+LOCATION ('pxf:///mnt/data/parquet/users_partition?PROFILE=deltavec&batch_size=16384') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+
+```
+
+```sql
+warehouse=# select * from ext_users_delta limit 10; 
+ user_id |  user_name   | age | region | signup_date 
+---------+--------------+-----+--------+-------------
+ 4979383 | user_4979383 |  44 | South  | 2017-02-09
+ 4979627 | user_4979627 |  28 | West   | 2017-05-14
+ 4979752 | user_4979752 |  32 | North  | 2017-12-04
+ 4980054 | user_4980054 |  31 | West   | 2017-06-18
+ 5038791 | user_5038791 |  69 | East   | 2017-05-02
+ 5038869 | user_5038869 |  22 | North  | 2017-12-04
+ 5082454 | user_5082454 |  33 | North  | 2017-06-08
+ 5012596 | user_5012596 |  53 | West   | 2017-07-18
+ 5012600 | user_5012600 |  52 | North  | 2017-11-30
+ 5012613 | user_5012613 |  21 | West   | 2017-12-21
+(10 rows)
+
+warehouse=# 
+
 
 
 ```
