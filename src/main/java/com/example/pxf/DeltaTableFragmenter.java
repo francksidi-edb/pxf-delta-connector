@@ -43,8 +43,6 @@ public class DeltaTableFragmenter extends BaseFragmenter {
         List<Fragment> fragments = new ArrayList<>();
         try {
             Snapshot snapshot = deltaLog.snapshot();
-            List<AddFile> allFiles = snapshot.getAllFiles();
-            int totalFiles = allFiles.size();
 
             // Get total segments from PXF context or default to 8
             int totalSegments = context.getTotalSegments();
@@ -54,17 +52,8 @@ public class DeltaTableFragmenter extends BaseFragmenter {
             }
 
 	    LOG.info("Starting fragment assignment.");
-	    LOG.info("Total files available: " + totalFiles);
-            LOG.info("Total segments configured: " + totalSegments);
-	    for (int i = 0; i < totalFiles; i++) {
-		AddFile file = allFiles.get(i);
-    		String filePath = file.getPath();
-    		int assignedSegment = i % totalSegments;
-    		LOG.info("Assigning file: " + filePath + " to segment: " + assignedSegment);
-    		DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(filePath, assignedSegment, totalSegments, null);
-    		fragments.add(new Fragment(context.getDataSource(), metadata, null));
-	    }
-
+            DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(context.getDataSource(), 0, totalSegments, null);
+            fragments.add(new Fragment(context.getDataSource(), metadata, null));
 	    LOG.info("Completed fragment assignment.");
             LOG.info("Total fragments created: " + fragments.size());
 

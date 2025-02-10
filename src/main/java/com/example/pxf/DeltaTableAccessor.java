@@ -72,7 +72,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             try {
                 String filePath = fileIterator.next();
                 LOG.info("Processing file: " + filePath);
-                rowIterator = snapshot.open(); // Open the iterator for the current file
+                rowIterator = snapshot.open(); // Open the iterator for the whole Delta table
                 return true;
             } catch (Exception e) {
                 LOG.log(Level.SEVERE, "Error opening file for reading rows", e);
@@ -87,8 +87,6 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             if (rowIterator != null && rowIterator.hasNext()) {
                 RowRecord row = rowIterator.next();
                 return new OneRow(null, extractRowValues(row, fields));
-            } else if (openNextFile()) {
-                return readNextObject(); // Recursively process the next file
             }
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error reading next object", e);
