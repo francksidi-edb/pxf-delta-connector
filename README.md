@@ -25,18 +25,16 @@ Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the De
             <resolver>com.example.pxf.DeltaTableResolver</resolver>
         </plugins>
     </profile>
-</profiles>
 
-	<profile>
+    <profile>
         <name>deltavec</name>
         <plugins>
             <fragmenter>com.example.pxf.DeltaPartitionFragmenter</fragmenter>
 	    <accessor>com.example.pxf.DeltaTableVectorizedAccessor</accessor>
 	    <resolver>com.example.pxf.DeltaTableVectorizedResolver</resolver>
         </plugins>
-</profile>
-
-
+    </profile>
+</profiles>
 
 ```
 
