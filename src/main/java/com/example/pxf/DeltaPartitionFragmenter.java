@@ -6,7 +6,6 @@ import org.greenplum.pxf.api.model.FragmentStats;
 import com.example.pxf.partitioning.DeltaVectorizedFragmentMetadata;
 
 import java.io.*;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;

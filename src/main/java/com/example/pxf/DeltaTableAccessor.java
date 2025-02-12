@@ -1,43 +1,62 @@
 package com.example.pxf;
 
-import io.delta.standalone.DeltaLog;
-import io.delta.standalone.Snapshot;
-import io.delta.standalone.data.CloseableIterator;
-import io.delta.standalone.data.RowRecord;
-import io.delta.standalone.types.StructField;
-import io.delta.standalone.types.StructType;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.greenplum.pxf.api.model.BasePlugin;
-import org.greenplum.pxf.api.model.RequestContext;
-import org.greenplum.pxf.api.security.SecureLogin;
-import org.greenplum.pxf.api.utilities.ColumnDescriptor;
-import org.greenplum.pxf.api.utilities.SpringContext;
-import org.greenplum.pxf.api.OneRow;
-import org.greenplum.pxf.api.model.Accessor;
-import org.greenplum.pxf.api.model.ConfigurationFactory;
 
-import java.util.Iterator;
-import java.util.List;
+import com.example.pxf.partitioning.DeltaFragmentMetadata;
+
+import org.greenplum.pxf.api.OneRow;
+
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
+import java.util.Optional;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
+import io.delta.kernel.*;
+import io.delta.kernel.data.ColumnarBatch;
+import io.delta.kernel.data.FilteredColumnarBatch;
+import io.delta.kernel.data.Row;
+import io.delta.kernel.types.*;
+import io.delta.kernel.utils.CloseableIterator;
+import io.delta.kernel.utils.FileStatus;
+import io.delta.kernel.internal.InternalScanFileUtils;
+import io.delta.kernel.internal.data.ScanStateRow;
+import io.delta.kernel.defaults.engine.DefaultEngine;
+import io.delta.kernel.engine.Engine;
+
+import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 
 public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.api.model.Accessor {
 
     private static final Logger LOG = Logger.getLogger(DeltaTableAccessor.class.getName());
-    private DeltaLog deltaLog;
+    private Engine engine;
     private Snapshot snapshot;
-    private StructType schema;
-    private List<StructField> fields;
-    private Iterator<String> fileIterator;
-    private CloseableIterator<RowRecord> rowIterator;
+    private Scan scan;
+    private CloseableIterator<FilteredColumnarBatch> scanFileIter;
+    private CloseableIterator<FilteredColumnarBatch> transformedData;
+    private CloseableIterator<Row> rowIterator;
+    private CloseableIterator<Row> scanFileRows;
+    private DeltaFragmentMetadata fragmentMeta;
+    private Row scanState ;
 
     @Override
     public void afterPropertiesSet() {
-        // No additional initialization required
+        try {
+            fragmentMeta = context.getFragmentMetadata();
+            Configuration hadoopConf = initializeHadoopConfiguration();
+            engine = DefaultEngine.create(hadoopConf);
+            Table deltaTable = Table.forPath(engine, context.getDataSource());
+            snapshot = deltaTable.getLatestSnapshot(engine);
+            scan = snapshot.getScanBuilder(engine).build();
+
+            scanState = scan.getScanState(engine);
+            scanFileIter = scan.getScanFiles(engine);
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error initialize Delta table", e);
+        }
     }
 
     @Override
@@ -46,19 +65,6 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             String deltaTablePath = context.getDataSource();
             LOG.info("Opening DeltaLog for table path: " + deltaTablePath);
 
-            Configuration hadoopConf = initializeHadoopConfiguration();
-            deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-            snapshot = deltaLog.snapshot();
-            schema = snapshot.getMetadata().getSchema();
-            fields = List.of(schema.getFields());
-
-            // Collect all add file paths into an iterator
-            fileIterator = snapshot.getAllFiles().stream()
-                    .map(file -> file.getPath())
-                    .collect(Collectors.toList())
-                    .iterator();
-
-            LOG.info("Delta table opened successfully for reading.");
             return openNextFile(); // Open the first file for reading rows
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error opening Delta table for reading", e);
@@ -66,14 +72,58 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         }
     }
 
+    private boolean readNextFiltedData() {
+        try {
+            if (transformedData != null && transformedData.hasNext()) {
+                FilteredColumnarBatch filteredData = transformedData.next();
+                rowIterator = filteredData.getRows();
+                return true;
+            } else if (readNextPhysicalData()) {
+                return true; // Recursively process the next file
+            }
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error reading next filteredData", e);
+        }
+        return false;
+    }
+
+    private boolean readNextPhysicalData() {
+        try {
+            if (scanFileRows != null && scanFileRows.hasNext()) {
+                Row scanFileRow = scanFileRows.next();
+                FileStatus fileStatus = InternalScanFileUtils.getAddFileStatus(scanFileRow);
+                String filePath = fileStatus.getPath();
+                if (!filePath.contains(fragmentMeta.getFilePath())) {
+                    LOG.fine("Skip the phyFile " + fileStatus.getPath());
+                    return readNextPhysicalData();
+                }
+                LOG.info("Processing file: " + filePath);
+                StructType physicalReadSchema =
+                ScanStateRow.getPhysicalDataReadSchema(engine, scanState);
+                CloseableIterator<ColumnarBatch> physicalDataIter =
+                engine.getParquetHandler().readParquetFiles(
+                  singletonCloseableIterator(fileStatus),
+                  physicalReadSchema,
+                  Optional.empty() /* optional predicate the connector can apply to filter data from the reader */
+                );
+                transformedData = Scan.transformPhysicalData(engine, scanState, scanFileRow, physicalDataIter);
+                return readNextFiltedData();
+            } else if (openNextFile()) {
+                return true; // Recursively process the next file
+            }
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error reading next physicalDataIter", e);
+        }
+        return false;
+    }
+
     private boolean openNextFile() {
         closeCurrentRowIterator(); // Ensure any previously open iterator is closed
-        if (fileIterator.hasNext()) {
+        if (scanFileIter.hasNext()) {
             try {
-                String filePath = fileIterator.next();
-                LOG.info("Processing file: " + filePath);
-                rowIterator = snapshot.open(); // Open the iterator for the current file
-                return true;
+                FilteredColumnarBatch scanFilesBatch = scanFileIter.next();
+                scanFileRows = scanFilesBatch.getRows();
+                return readNextPhysicalData();
             } catch (Exception e) {
                 LOG.log(Level.SEVERE, "Error opening file for reading rows", e);
             }
@@ -85,10 +135,10 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     public OneRow readNextObject() {
         try {
             if (rowIterator != null && rowIterator.hasNext()) {
-                RowRecord row = rowIterator.next();
-                return new OneRow(null, extractRowValues(row, fields));
-            } else if (openNextFile()) {
-                return readNextObject(); // Recursively process the next file
+                Row row = rowIterator.next();
+                return new OneRow(null, extractRowValues(row));
+            } else if (readNextFiltedData()) {
+                return readNextObject(); // Recursively process the next DataRows
             }
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error reading next object", e);
@@ -138,46 +188,56 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         return hadoopConf;
     }
 
-    private String extractRowValues(RowRecord row, List<StructField> fields) {
-        StringBuilder rowValues = new StringBuilder();
-
-        for (StructField field : fields) {
-            String fieldName = field.getName();
-            Object value;
-
-            // Handle field types
-            switch (field.getDataType().getTypeName().toLowerCase()) {
-                case "integer":
-                    value = row.getInt(fieldName);
-                    break;
-                case "double":
-                    value = row.getDouble(fieldName);
-                    break;
-                case "string":
-                    value = row.getString(fieldName);
-                    break;
-                case "boolean":
-                    value = row.getBoolean(fieldName);
-                    break;
-                case "long":
-                    value = row.getLong(fieldName);
-                    break;
-                case "date":
-                    value = row.getDate(fieldName);
-                    break;
-                case "timestamp":
-                    value = row.getTimestamp(fieldName);
-                    break;
-                case "decimal":
-                    value = row.getBigDecimal(fieldName);
-                    break;
-                default:
-                    value = "Unsupported Type";
-            }
-
-            rowValues.append(fieldName).append("=").append(value).append(", ");
+private static String getValue(Row row, int columnOrdinal) {
+        DataType dataType = row.getSchema().at(columnOrdinal).getDataType();
+        if (row.isNullAt(columnOrdinal)) {
+            return null;
+        } else if (dataType instanceof BooleanType) {
+            return Boolean.toString(row.getBoolean(columnOrdinal));
+        } else if (dataType instanceof ByteType) {
+            return Byte.toString(row.getByte(columnOrdinal));
+        } else if (dataType instanceof ShortType) {
+            return Short.toString(row.getShort(columnOrdinal));
+        } else if (dataType instanceof IntegerType) {
+            return Integer.toString(row.getInt(columnOrdinal));
+        } else if (dataType instanceof DateType) {
+            // DateType data is stored internally as the number of days since 1970-01-01
+            int daysSinceEpochUTC = row.getInt(columnOrdinal);
+            return LocalDate.ofEpochDay(daysSinceEpochUTC).toString();
+        } else if (dataType instanceof LongType) {
+            return Long.toString(row.getLong(columnOrdinal));
+        } else if (dataType instanceof TimestampType || dataType instanceof TimestampNTZType) {
+            // Timestamps are stored internally as the number of microseconds since epoch.
+            // TODO: TimestampType should use the session timezone to display values.
+            long microSecsSinceEpochUTC = row.getLong(columnOrdinal);
+            LocalDateTime dateTime = LocalDateTime.ofEpochSecond(
+                microSecsSinceEpochUTC / 1_000_000 /* epochSecond */,
+                (int) (1000 * microSecsSinceEpochUTC % 1_000_000) /* nanoOfSecond */,
+                ZoneOffset.UTC);
+            return dateTime.toString();
+        } else if (dataType instanceof FloatType) {
+            return Float.toString(row.getFloat(columnOrdinal));
+        } else if (dataType instanceof DoubleType) {
+            return Double.toString(row.getDouble(columnOrdinal));
+        } else if (dataType instanceof StringType) {
+            return row.getString(columnOrdinal);
+        } else if (dataType instanceof BinaryType) {
+            return new String(row.getBinary(columnOrdinal));
+        } else if (dataType instanceof DecimalType) {
+            return row.getDecimal(columnOrdinal).toString();
+        } else {
+            throw new UnsupportedOperationException("unsupported data type: " + dataType);
         }
+    }
 
+    private String extractRowValues(Row row) {
+        int numCols = row.getSchema().length();
+        String fieldName = "";
+        StringBuilder rowValues = new StringBuilder();
+        for (int i = 0; i < numCols; i++) {
+            fieldName = row.getSchema().fieldNames().get(i);
+            rowValues.append(fieldName).append("=").append(getValue(row, i)).append(", ");
+        }
         if (rowValues.length() > 0) {
             rowValues.setLength(rowValues.length() - 2); // Remove trailing comma and space
         }

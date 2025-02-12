@@ -51,6 +51,8 @@
     <groupId>org.greenplum.pxf</groupId>
     <artifactId>pxf-hdfs</artifactId>
     <version>6.11.0-SNAPSHOT</version>
+    <scope>system</scope>
+    <systemPath>${project.basedir}/lib/pxf-hdfs-6.11.0-SNAPSHOT.jar</systemPath>
 </dependency>
 
 <dependency>
@@ -83,6 +85,8 @@
             <groupId>io.delta</groupId>
             <artifactId>delta-standalone</artifactId>
             <version>3.3.0</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/delta-standalone-3.3.0.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>io.delta</groupId>
