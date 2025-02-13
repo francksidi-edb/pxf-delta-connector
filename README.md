@@ -29,9 +29,9 @@ Update the `pxf-profiles.xml` file located at `$PXF_BASE/conf` to include the De
     <profile>
         <name>deltavec</name>
         <plugins>
-            <fragmenter>com.example.pxf.DeltaPartitionFragmenter</fragmenter>
-	    <accessor>com.example.pxf.DeltaTableVectorizedAccessor</accessor>
-	    <resolver>com.example.pxf.DeltaTableVectorizedResolver</resolver>
+            <fragmenter>com.example.pxf.DeltaTableVectorizedFragmenter</fragmenter>
+            <accessor>com.example.pxf.DeltaTableVectorizedAccessor</accessor>
+            <resolver>com.example.pxf.DeltaTableVectorizedResolver</resolver>
         </plugins>
     </profile>
 </profiles>
