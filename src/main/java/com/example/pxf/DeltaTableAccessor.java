@@ -17,7 +17,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import org.apache.commons.lang3.StringUtils;
-import java.util.concurrent.locks.ReentrantLock;
 
 import io.delta.kernel.*;
 import io.delta.kernel.data.ColumnVector;
@@ -49,10 +48,9 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private Row scanState ;
     private StructType tableSchema;
     private TransactionBuilder txnBuilder;
-    private static ReentrantLock lock = new ReentrantLock();
     List<Row> dataActions = new ArrayList<>();
     private Transaction txn;
-    private static final String FILE_SCHEME = "file";
+    private boolean isParentPath = false;
 
     @Override
     public void afterPropertiesSet() {
@@ -67,15 +65,24 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     @Override
     public boolean openForRead() {
         try {
+            String tablePath = context.getDataSource();
             fragmentMeta = context.getFragmentMetadata();
-            Table deltaTable = Table.forPath(engine, context.getDataSource());
+            isParentPath = DeltaUtilities.isParentPath(tablePath);
+            if (isParentPath) {
+                String partitionInfo = fragmentMeta.getPartitionInfo();
+                if (partitionInfo == null || partitionInfo.isEmpty()) {
+                    LOG.info("Partition filter is empty for parent path: " + tablePath);
+                } else {
+                    tablePath = tablePath + "/" + partitionInfo;
+                }
+            }
+            LOG.info("Opening DeltaLog for table path: " + tablePath);
+            Table deltaTable = Table.forPath(engine, tablePath);
             snapshot = deltaTable.getLatestSnapshot(engine);
             scan = snapshot.getScanBuilder(engine).build();
 
             scanState = scan.getScanState(engine);
             scanFileIter = scan.getScanFiles(engine);
-            String deltaTablePath = context.getDataSource();
-            LOG.info("Opening DeltaLog for table path: " + deltaTablePath);
 
             return openNextFile(); // Open the first file for reading rows
         } catch (Exception e) {
@@ -105,7 +112,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
                 Row scanFileRow = scanFileRows.next();
                 FileStatus fileStatus = InternalScanFileUtils.getAddFileStatus(scanFileRow);
                 String filePath = fileStatus.getPath();
-                if (!filePath.contains(fragmentMeta.getFilePath())) {
+                if (!isParentPath && !filePath.contains(fragmentMeta.getFilePath())) {
                     LOG.fine("Skip the phyFile " + fileStatus.getPath());
                     return readNextPhysicalData();
                 }
@@ -166,17 +173,17 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
 
 
     private void closeCurrentRowIterator() {
-    if (rowIterator != null) {
-        try {
-            rowIterator.close();
-        } catch (IOException e) {
-            LOG.log(Level.WARNING, "Error closing row iterator", e);
+        if (rowIterator != null) {
+            try {
+                rowIterator.close();
+            } catch (IOException e) {
+                LOG.log(Level.WARNING, "Error closing row iterator", e);
+            }
+            rowIterator = null;
         }
-        rowIterator = null;
     }
-}
 
-    private synchronized void createTransaction(String tablePath) {
+    private void createTransaction(String tablePath) {
         // Create a `Table` object with the given destination table path
         Table table = Table.forPath(engine, tablePath);
 
@@ -186,21 +193,14 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             txnBuilder =
                 table.createTransactionBuilder(
                         engine,
-                        "Example", /* engineInfo */
+                        "pxf", /* engineInfo */
                         Operation.CREATE_TABLE);
 
             tableSchema = generateParquetSchema(context.getTupleDescription());
-            if (!isDeltaTable(tablePath)) {
-                // Set the schema of the new table on the transaction builder
+            if (!DeltaUtilities.isDeltaTable(tablePath)) {
+                // Set the schema of the NEW table on the transaction builder
                 txnBuilder = txnBuilder.withSchema(engine, tableSchema);
             }
-            // Set the transaction identifiers for idempotent writes
-            // Delta/Kernel makes sure that there exists only one transaction in the Delta log
-            // with the given application id and txn version
-            txnBuilder = txnBuilder.withTransactionId(
-                engine,
-                Thread.currentThread().getName(), /* application id */
-                context.getSegmentId() /* txn version */);
             // Build the transaction
             txn = txnBuilder.build(engine);
             //LOG.info("thread name: " + Thread.currentThread().getName() + " txn version: " + context.getSegmentId());
@@ -209,15 +209,10 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         }
     }
 
-    private boolean isDeltaTable(String tablePath) {
-        // check the tablePath/_delta_log directory exists
-        return new File(tablePath + "/_delta_log").exists();
-    }
-
     @Override
     public boolean openForWrite() {
         String tablePath = String.format("%s/%s_%d", StringUtils.removeEnd(context.getDataSource(), "/"), "seg", context.getSegmentId());
-        LOG.info("table path: " + tablePath);
+        LOG.info("open for write, table path: " + tablePath);
         createTransaction(tablePath);
 
         return true;
@@ -283,11 +278,11 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private void verifyCommitSuccess(String tablePath, TransactionCommitResult result) {
         // Verify the commit was successful
         if (result.getVersion() >= 0) {
-            System.out.println("Table created successfully at: " + tablePath);
+            LOG.info("Table created/commited successfully at: " + tablePath);
         } else {
             // This should never happen. If there is a reason for table be not created
             // `Transaction.commit` always throws an exception.
-            throw new RuntimeException("Table creation failed");
+            throw new RuntimeException("Table creation/commit failed");
         }
     }
 

@@ -31,6 +31,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import org.greenplum.pxf.api.error.UnsupportedTypeException;
+import com.example.pxf.partitioning.DeltaFragmentMetadata;
 
 /**
  * Resolver for Delta Table rows into Greenplum fields.
@@ -73,52 +74,49 @@ public class DeltaTableResolver implements Resolver {
         return hadoopConf;
     }
 
-/*
-    @Override
-    public List<OneField> getFields(OneRow row) {
-        RowRecord record = (RowRecord) row.getData();
-        StructType schema = (StructType) context.getMetadata();
-
-        List<OneField> fields = new ArrayList<>();
-
-        for (ColumnDescriptor column : context.getTupleDescription()) {
-            String columnName = column.columnName();
-            DataType columnType = column.getDataType();
-            Object value = extractValue(record, columnName, schema);
-
-            OneField oneField = new OneField();
-            oneField.type = columnType.getOID();
-            oneField.val = value;
-            fields.add(oneField);
-
+    private void initializeSchema() {
+        String tablePath = context.getDataSource();
+        if (tablePath == null || tablePath.isEmpty()) {
+            throw new IllegalArgumentException("Delta table path is not provided.");
         }
+        boolean isParentPath = DeltaUtilities.isParentPath(tablePath);
+        if (isParentPath) {
+            DeltaFragmentMetadata fragmentMeta = context.getFragmentMetadata();
+            // fragmentMeta is only valid for read operations
+            if (fragmentMeta != null) {
+                String partitionInfo = fragmentMeta.getPartitionInfo();
+                if (partitionInfo == null || partitionInfo.isEmpty()) {
+                    LOG.info("Partition filter is empty for parent path: " + tablePath);
+                } else {
+                    tablePath = tablePath + "/" + partitionInfo;
+                }
+            }
+        }
+        LOG.info("Delta table path: " + tablePath);
+        if (!DeltaUtilities.isDeltaTable(tablePath)) {
+            LOG.info("Delta table is empty at path: " + tablePath);
+            return;
+        }
+        try {
+            // Initialize DeltaLog and schema
+            Configuration hadoopConf = initializeHadoopConfiguration();
+            deltaLog = DeltaLog.forTable(hadoopConf, new Path(tablePath));
+            Snapshot snapshot = deltaLog.snapshot();
 
-        return fields;
+            schema = snapshot.getMetadata().getSchema();
+            if (schema == null) {
+                throw new IllegalStateException("Schema is null. Ensure the Delta table has valid metadata.");
+            }
+
+            LOG.info("Schema successfully loaded: " + schema.getTreeString());
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error initializing DeltaTableResolver", e);
+            throw new RuntimeException("Failed to initialize DeltaTableResolver", e);
+        }
     }
-*/
+
 @Override
 public List<OneField> getFields(OneRow row) {
-    String deltaTablePath = context.getDataSource();
-    if (deltaTablePath == null || deltaTablePath.isEmpty()) {
-        throw new IllegalArgumentException("Delta table path is not provided.");
-    }
-    LOG.info("Delta table path: " + deltaTablePath);
-    try {
-        // Initialize DeltaLog and schema
-        Configuration hadoopConf = initializeHadoopConfiguration();
-        deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-        Snapshot snapshot = deltaLog.snapshot();
-
-        schema = snapshot.getMetadata().getSchema();
-        if (schema == null) {
-            throw new IllegalStateException("Schema is null. Ensure the Delta table has valid metadata.");
-        }
-
-        LOG.info("Schema successfully loaded: " + schema.getTreeString());
-    } catch (Exception e) {
-        LOG.log(Level.SEVERE, "Error initializing DeltaTableResolver", e);
-        throw new RuntimeException("Failed to initialize DeltaTableResolver", e);
-    }
     if (schema == null) {
         throw new IllegalStateException("Schema is not initialized. Check Delta table metadata.");
     }
@@ -161,10 +159,8 @@ private void logRowDetails(RowRecord record, StructType schema) {
         rowDetails.append(field.getName()).append("=").append(value).append(", ");
     }
     // Log the row details
-    LOG.info("Processed Row: " + rowDetails);
+    LOG.fine("Processed Row: " + rowDetails);
 }
-
-
 
 private RowRecord deserializeToRowRecord(String rowData, StructType schema) {
     try {
@@ -254,8 +250,8 @@ private Object extractValue(RowRecord record, String columnName, StructType sche
     @Override
     public void afterPropertiesSet() {
         LOG.info("Initializing DeltaTableResolver...");
+        initializeSchema();
     }
-
 
     private ColumnVector convertToColumnVector(OneField field, int index) {
         List<ColumnDescriptor> columnDescriptors = context.getTupleDescription();
