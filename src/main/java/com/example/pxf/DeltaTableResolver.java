@@ -1,8 +1,6 @@
 package com.example.pxf;
 
 import io.delta.standalone.Snapshot;
-import io.delta.standalone.actions.AddFile;
-import io.delta.standalone.data.CloseableIterator;
 import io.delta.standalone.data.RowRecord;
 import io.delta.standalone.types.StructField;
 import io.delta.standalone.types.StructType;
@@ -14,26 +12,25 @@ import org.greenplum.pxf.api.utilities.ColumnDescriptor;
 import org.greenplum.pxf.api.io.DataType;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+
 import io.delta.standalone.DeltaLog;
+import io.delta.kernel.data.*;
+import io.delta.kernel.defaults.internal.data.vector.DefaultGenericVector;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import java.util.logging.Logger;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-import java.util.Map;
-import java.util.HashMap;
-import com.example.pxf.CustomRowRecord;
 import java.util.logging.Level;
 import java.sql.Date;
+import java.time.Instant;
 import java.math.BigDecimal;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
 
-
+import org.greenplum.pxf.api.error.UnsupportedTypeException;
 
 /**
  * Resolver for Delta Table rows into Greenplum fields.
@@ -44,21 +41,15 @@ public class DeltaTableResolver implements Resolver {
 
 	private RequestContext context;
 	private DeltaLog deltaLog;
-private Snapshot snapshot;
-private StructType schema;
-private List<StructField> fields;
-private List<ColumnDescriptor> columns;
-private Configuration configuration;
-private int batchSize;
-private static final int DEFAULT_BATCH_SIZE = 1000;
-private final ObjectMapper objectMapper = new ObjectMapper();
-
+    private StructType schema;
+    private Configuration configuration;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
-public void setRequestContext(RequestContext context) {
-    this.context = context;
-    this.configuration = context.getConfiguration();
-}
+    public void setRequestContext(RequestContext context) {
+        this.context = context;
+        this.configuration = context.getConfiguration();
+    }
 
     private Configuration initializeHadoopConfiguration() {
         Configuration hadoopConf = new Configuration();
@@ -107,6 +98,27 @@ public void setRequestContext(RequestContext context) {
 */
 @Override
 public List<OneField> getFields(OneRow row) {
+    String deltaTablePath = context.getDataSource();
+    if (deltaTablePath == null || deltaTablePath.isEmpty()) {
+        throw new IllegalArgumentException("Delta table path is not provided.");
+    }
+    LOG.info("Delta table path: " + deltaTablePath);
+    try {
+        // Initialize DeltaLog and schema
+        Configuration hadoopConf = initializeHadoopConfiguration();
+        deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
+        Snapshot snapshot = deltaLog.snapshot();
+
+        schema = snapshot.getMetadata().getSchema();
+        if (schema == null) {
+            throw new IllegalStateException("Schema is null. Ensure the Delta table has valid metadata.");
+        }
+
+        LOG.info("Schema successfully loaded: " + schema.getTreeString());
+    } catch (Exception e) {
+        LOG.log(Level.SEVERE, "Error initializing DeltaTableResolver", e);
+        throw new RuntimeException("Failed to initialize DeltaTableResolver", e);
+    }
     if (schema == null) {
         throw new IllegalStateException("Schema is not initialized. Check Delta table metadata.");
     }
@@ -196,41 +208,6 @@ private String convertToJson(String rowData) {
     return jsonBuilder.toString();
 }
 
-
-
-/*
-
-    private Object extractValue(RowRecord row, String columnName, StructType schema) {
-        StructField field = schema.get(columnName);
-
-        if (row.isNullAt(columnName)) {
-            return null;
-        }
-
-        switch (field.getDataType().getTypeName().toLowerCase()) {
-            case "integer":
-                return row.getInt(columnName);
-            case "double":
-                return row.getDouble(columnName);
-            case "string":
-                return row.getString(columnName);
-            case "boolean":
-                return row.getBoolean(columnName);
-            case "long":
-                return row.getLong(columnName);
-            case "date":
-                return row.getDate(columnName).toString();
-            case "timestamp":
-                return row.getTimestamp(columnName).toString();
-            default:
-                throw new UnsupportedOperationException("Unsupported column type: " + field.getDataType().getTypeName());
-        }
-    }
-
-
-    */
-
-
 private Object extractValue(RowRecord record, String columnName, StructType schema) {
     if (schema == null) {
         throw new IllegalStateException("Schema is null. Ensure schema is initialized before extracting values.");
@@ -258,111 +235,76 @@ private Object extractValue(RowRecord record, String columnName, StructType sche
         case "long":
             return record.getLong(columnName);
 
-case "date":
-    if (dateAsString) {
-        return record.getString(columnName); // Treat as String
-    } else {
-        return Date.valueOf(record.getString(columnName)); // Convert to Date
-    }
+        case "date":
+            if (dateAsString) {
+                return record.getString(columnName); // Treat as String
+            } else {
+                return Date.valueOf(record.getString(columnName)); // Convert to Date
+            }
         case "timestamp":
             return record.getTimestamp(columnName).toString();
 	    case "decimal":
-    return new BigDecimal(record.getString(columnName));
+            return new BigDecimal(record.getString(columnName));
 
         default:
             throw new UnsupportedOperationException("Unsupported column type: " + field.getDataType().getTypeName());
     }
 }
 
-
-
-
-/*
     @Override
-public void afterPropertiesSet() {
-    LOG.info("Initializing DeltaTableResolver properties...");
-
-    // Validate and initialize the Delta table path
-    String deltaTablePath = context.getDataSource();
-    if (deltaTablePath == null || deltaTablePath.trim().isEmpty()) {
-        throw new IllegalArgumentException("Delta table path must be provided in the data source.");
-    }
-    LOG.info("Initializing Delta for table path: " + deltaTablePath);
-
-    // Initialize Hadoop configuration for DeltaLog
-    Configuration hadoopConf = initializeHadoopConfiguration();
-
-    // Load the Delta table's metadata
-    try {
-        deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-        snapshot = deltaLog.snapshot();
-        schema = snapshot.getMetadata().getSchema();
-        fields = List.of(schema.getFields());
-        LOG.info("Loaded Delta table schema: " +  schema.getTreeString());
-    } catch (Exception e) {
-        throw new RuntimeException("Failed to initialize Delta table metadata.", e);
+    public void afterPropertiesSet() {
+        LOG.info("Initializing DeltaTableResolver...");
     }
 
-    // Validate and log tuple descriptions
-    columns = context.getTupleDescription();
-    if (columns.isEmpty()) {
-        throw new IllegalArgumentException("No columns found in the request context.");
-    }
-    LOG.info("Tuple description: " + columns);
 
-    // Optional: Load custom configurations
-    String batchSizeString = configuration.get("delta.batch.size");
-    if (batchSizeString != null && !batchSizeString.trim().isEmpty()) {
-    try {
-        batchSize = Integer.parseInt(batchSizeString);
-        LOG.info("Batch size for Delta table reads: " + batchSize);
-    } catch (NumberFormatException e) {
-        throw new IllegalArgumentException("Invalid batch size specified: " + batchSizeString, e);
-    }
-} else {
-    batchSize = DEFAULT_BATCH_SIZE;
-    LOG.info("Using default batch size: " + batchSize);
-}
+    private ColumnVector convertToColumnVector(OneField field, int index) {
+        List<ColumnDescriptor> columnDescriptors = context.getTupleDescription();
+        ColumnDescriptor columnDescriptor = columnDescriptors.get(index);
+        DataType columnType = columnDescriptor.getDataType();
+        Object value = field.val;
 
-
-    LOG.info("DeltaTableResolver properties successfully initialized.");
-}
-*/
-
-@Override
-public void afterPropertiesSet() {
-    LOG.info("Initializing DeltaTableResolver...");
-
-    String deltaTablePath = context.getDataSource();
-    if (deltaTablePath == null || deltaTablePath.isEmpty()) {
-        throw new IllegalArgumentException("Delta table path is not provided.");
-    }
-    LOG.info("Delta table path: " + deltaTablePath);
-
-    try {
-        // Initialize DeltaLog and schema
-        Configuration hadoopConf = initializeHadoopConfiguration();
-        deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-        Snapshot snapshot = deltaLog.snapshot();
-
-        schema = snapshot.getMetadata().getSchema();
-        if (schema == null) {
-            throw new IllegalStateException("Schema is null. Ensure the Delta table has valid metadata.");
+        switch (columnType) {
+            case SMALLINT:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.ShortType.SHORT, new Short[]{(Short) value}); 
+            case INTEGER:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.IntegerType.INTEGER, new Integer[]{(Integer) value});
+            case BIGINT:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.LongType.LONG, new Long[]{(Long) value});
+            case REAL:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.FloatType.FLOAT, new Float[]{(Float) value});
+            case FLOAT8:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.DoubleType.DOUBLE, new Double[]{(Double) value});
+            case TEXT:
+            case VARCHAR:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.StringType.STRING, new String[]{(String) value});
+            case BOOLEAN:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.BooleanType.BOOLEAN, new Boolean[]{(Boolean) value});
+            case BYTEA:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.BinaryType.BINARY, new Byte[]{(Byte) value});
+            case DATE:
+                java.sql.Date date = java.sql.Date.valueOf(value.toString());
+                long day = TimeUnit.SECONDS.toDays(date.getTime()/1000);    //Todo: handle timezone?
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.DateType.DATE, new Integer[]{(Integer) (int)day});
+            case TIMESTAMP:
+                Instant instant = java.sql.Timestamp.valueOf(value.toString()).toInstant();
+                long micros = TimeUnit.SECONDS.toMicros(instant.getEpochSecond()) + TimeUnit.NANOSECONDS.toMicros(instant.getNano());
+                //LOG.info("final micros: " + micros);
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.TimestampType.TIMESTAMP, new Long[]{(Long) micros});
+            case NUMERIC:
+                return DefaultGenericVector.fromArray(io.delta.kernel.types.StringType.STRING, new String[]{(String) value});
+            default:
+                throw new UnsupportedTypeException(columnType.name());
         }
-
-        LOG.info("Schema successfully loaded: " + schema.getTreeString());
-    } catch (Exception e) {
-        LOG.log(Level.SEVERE, "Error initializing DeltaTableResolver", e);
-        throw new RuntimeException("Failed to initialize DeltaTableResolver", e);
     }
-}
-
-
-
 
     @Override
     public OneRow setFields(List<OneField> record) {
-        throw new UnsupportedOperationException("Writing is not supported by DeltaTableResolver.");
+        ColumnVector[] vectors = new ColumnVector[record.size()];
+        for (int i = 0; i < record.size(); i++) {
+            OneField field = record.get(i);
+            vectors[i] = convertToColumnVector(field, i);
+        }
+        return new OneRow(null, vectors);
     }
 }
 

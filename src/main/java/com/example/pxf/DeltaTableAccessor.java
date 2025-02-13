@@ -6,28 +6,34 @@ import org.greenplum.pxf.api.model.BasePlugin;
 import com.example.pxf.partitioning.DeltaFragmentMetadata;
 
 import org.greenplum.pxf.api.OneRow;
+import org.greenplum.pxf.api.utilities.ColumnDescriptor;
 
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.Optional;
+import java.util.*;
 import java.io.IOException;
+import java.io.File;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import org.apache.commons.lang3.StringUtils;
+import java.util.concurrent.locks.ReentrantLock;
 
 import io.delta.kernel.*;
+import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.ColumnarBatch;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.types.*;
-import io.delta.kernel.utils.CloseableIterator;
-import io.delta.kernel.utils.FileStatus;
 import io.delta.kernel.internal.InternalScanFileUtils;
 import io.delta.kernel.internal.data.ScanStateRow;
 import io.delta.kernel.defaults.engine.DefaultEngine;
+import io.delta.kernel.defaults.internal.data.DefaultColumnarBatch;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.utils.*;
 
 import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
+import static io.delta.kernel.internal.util.Utils.toCloseableIterator;
 
 public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.api.model.Accessor {
 
@@ -41,19 +47,18 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private CloseableIterator<Row> scanFileRows;
     private DeltaFragmentMetadata fragmentMeta;
     private Row scanState ;
+    private StructType tableSchema;
+    private TransactionBuilder txnBuilder;
+    private static ReentrantLock lock = new ReentrantLock();
+    List<Row> dataActions = new ArrayList<>();
+    private Transaction txn;
+    private static final String FILE_SCHEME = "file";
 
     @Override
     public void afterPropertiesSet() {
         try {
-            fragmentMeta = context.getFragmentMetadata();
             Configuration hadoopConf = initializeHadoopConfiguration();
             engine = DefaultEngine.create(hadoopConf);
-            Table deltaTable = Table.forPath(engine, context.getDataSource());
-            snapshot = deltaTable.getLatestSnapshot(engine);
-            scan = snapshot.getScanBuilder(engine).build();
-
-            scanState = scan.getScanState(engine);
-            scanFileIter = scan.getScanFiles(engine);
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error initialize Delta table", e);
         }
@@ -62,6 +67,13 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     @Override
     public boolean openForRead() {
         try {
+            fragmentMeta = context.getFragmentMetadata();
+            Table deltaTable = Table.forPath(engine, context.getDataSource());
+            snapshot = deltaTable.getLatestSnapshot(engine);
+            scan = snapshot.getScanBuilder(engine).build();
+
+            scanState = scan.getScanState(engine);
+            scanFileIter = scan.getScanFiles(engine);
             String deltaTablePath = context.getDataSource();
             LOG.info("Opening DeltaLog for table path: " + deltaTablePath);
 
@@ -164,19 +176,191 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     }
 }
 
+    private synchronized void createTransaction(String tablePath) {
+        // Create a `Table` object with the given destination table path
+        Table table = Table.forPath(engine, tablePath);
+
+        // Create a transaction builder to build the transaction
+        try {
+            LOG.info("Creating transaction for table: " + tablePath);
+            txnBuilder =
+                table.createTransactionBuilder(
+                        engine,
+                        "Example", /* engineInfo */
+                        Operation.CREATE_TABLE);
+
+            tableSchema = generateParquetSchema(context.getTupleDescription());
+            if (!isDeltaTable(tablePath)) {
+                // Set the schema of the new table on the transaction builder
+                txnBuilder = txnBuilder.withSchema(engine, tableSchema);
+            }
+            // Set the transaction identifiers for idempotent writes
+            // Delta/Kernel makes sure that there exists only one transaction in the Delta log
+            // with the given application id and txn version
+            txnBuilder = txnBuilder.withTransactionId(
+                engine,
+                Thread.currentThread().getName(), /* application id */
+                context.getSegmentId() /* txn version */);
+            // Build the transaction
+            txn = txnBuilder.build(engine);
+            //LOG.info("thread name: " + Thread.currentThread().getName() + " txn version: " + context.getSegmentId());
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error creating transaction", e);
+        }
+    }
+
+    private boolean isDeltaTable(String tablePath) {
+        // check the tablePath/_delta_log directory exists
+        return new File(tablePath + "/_delta_log").exists();
+    }
+
     @Override
     public boolean openForWrite() {
-        throw new UnsupportedOperationException("Write operations are not supported by DeltaTableAccessor");
+        String tablePath = String.format("%s/%s_%d", StringUtils.removeEnd(context.getDataSource(), "/"), "seg", context.getSegmentId());
+        LOG.info("table path: " + tablePath);
+        createTransaction(tablePath);
+
+        return true;
+    }
+
+    /**
+     * Generate schema for all the supported types using column descriptors
+     *
+     * @param columns contains Greenplum data type and column name
+     * @return the generated parquet schema used for write
+     */
+    private StructType generateParquetSchema(List<ColumnDescriptor> columns) {
+        StructType schema = new StructType();
+        for (ColumnDescriptor column : columns) {
+            schema = schema.add(column.columnName(), getTypeForColumnDescriptor(column));
+            LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
+        }
+        return schema;
+    }
+
+    /**
+     * Get the corresponding Parquet type for the given Greenplum column descriptor
+     *
+     * @param columnDescriptor contains Greenplum data type and column name
+     * @return the corresponding Parquet type
+     */
+    private DataType getTypeForColumnDescriptor(ColumnDescriptor columnDescriptor) {
+        String typeName = columnDescriptor.columnTypeName();
+        switch (typeName.toLowerCase()) {
+            case "boolean":
+                return BooleanType.BOOLEAN;
+            case "bytea":
+                return ByteType.BYTE;
+            case "bigint":
+            case "int8":
+                return LongType.LONG;
+            case "integer":
+            case "int4":
+                return IntegerType.INTEGER;
+            case "smallint":
+            case "int2":
+                return ShortType.SHORT;
+            case "real":
+            case "float":
+            case "float4":
+                return FloatType.FLOAT;
+            case "float8":
+                return DoubleType.DOUBLE;
+            case "date":
+                return DateType.DATE;
+            case "timestamp":
+                return TimestampType.TIMESTAMP;
+            case "text":
+            case "varchar":
+            case "bpchar":
+            case "numeric":             // Greenplum numeric type is mapped to string type now
+                return StringType.STRING;
+            default:
+                throw new UnsupportedOperationException("Unsupported data type: " + typeName);
+        }
+    }
+
+    private void verifyCommitSuccess(String tablePath, TransactionCommitResult result) {
+        // Verify the commit was successful
+        if (result.getVersion() >= 0) {
+            System.out.println("Table created successfully at: " + tablePath);
+        } else {
+            // This should never happen. If there is a reason for table be not created
+            // `Transaction.commit` always throws an exception.
+            throw new RuntimeException("Table creation failed");
+        }
     }
 
     @Override
     public boolean writeNextObject(OneRow oneRow) {
-        throw new UnsupportedOperationException("Write operations are not supported by DeltaTableAccessor");
+        ColumnVector[] columns = (ColumnVector[]) oneRow.getData();
+        ColumnarBatch batch = new DefaultColumnarBatch(1, tableSchema, columns);
+        FilteredColumnarBatch filteredBatch = new FilteredColumnarBatch(batch, Optional.empty());
+        CloseableIterator<FilteredColumnarBatch> data = toCloseableIterator(Arrays.asList(filteredBatch).iterator());
+
+        // Get the transaction state
+        Row txnState = txn.getTransactionState(engine);
+        // First transform the logical data to physical data that needs to be written to the Parquet
+        // files
+        CloseableIterator<FilteredColumnarBatch> physicalData =
+                Transaction.transformLogicalData(
+                        engine,
+                        txnState,
+                        data,
+                        // partition values - as this table is unpartitioned, it should be empty
+                        Collections.emptyMap());
+
+        // Get the write context
+        DataWriteContext writeContext = Transaction.getWriteContext(
+                engine,
+                txnState,
+                // partition values - as this table is unpartitioned, it should be empty
+                Collections.emptyMap());
+
+
+        // Now write the physical data to Parquet files
+        try {
+            // Write the physical data to Parquet files
+            CloseableIterator<DataFileStatus> dataFiles = engine.getParquetHandler()
+                    .writeParquetFiles(
+                            writeContext.getTargetDirectory(),
+                            physicalData,
+                            writeContext.getStatisticsColumns());
+            // Now convert the data file status to data actions that needs to be written to the Delta
+            // table log
+            CloseableIterator<Row> dataAction = Transaction.generateAppendActions(engine, txnState, dataFiles, writeContext);
+            while (dataAction.hasNext()) {
+                dataActions.add(dataAction.next());
+            }
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error writing next object", e);
+            return false;
+        }
+
+        return true;
+    }
+
+    private synchronized void commitTx(){
+        try {
+            // Create a iterable out of the data actions. If the contents are too big to fit in memory,
+            // the connector may choose to write the data actions to a temporary file and return an
+            // iterator that reads from the file.
+            CloseableIterable<Row> dataActionsIterable =
+            CloseableIterable.inMemoryIterable(toCloseableIterator(dataActions.iterator()));
+            // Commit the transaction.
+            TransactionCommitResult commitResult = txn.commit(engine, dataActionsIterable);
+                    // Check the transaction commit result
+            verifyCommitSuccess(context.getDataSource(), commitResult);
+            } catch (Exception e) {
+                LOG.log(Level.SEVERE, "Error commit tx", e);
+                return ;
+        }
     }
 
     @Override
     public void closeForWrite() {
-        throw new UnsupportedOperationException("Write operations are not supported by DeltaTableAccessor");
+        commitTx();
+        return;
     }
 
     private Configuration initializeHadoopConfiguration() {
