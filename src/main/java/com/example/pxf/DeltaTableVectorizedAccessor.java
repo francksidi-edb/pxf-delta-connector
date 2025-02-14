@@ -40,6 +40,7 @@ import java.time.Duration;
 import java.time.Instant;
 
 import com.example.pxf.partitioning.DeltaVectorizedFragmentMetadata;
+import com.example.pxf.DeltaUtilities;
 
 import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 import static io.delta.kernel.internal.util.Utils.toCloseableIterator;
@@ -117,6 +118,9 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
                 LOG.info("Invalid partition filter: " + partitionInfo);
             }
         }
+        StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription());
+        scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
+
         scan = scanBuilder.build();
         scanState = scan.getScanState(engine);
         scanFileIter = scan.getScanFiles(engine);
@@ -195,62 +199,6 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
         }
         LOG.info("DeltaTableVectorizedAccessor closed.");
     }
-    /**
-     * Get the corresponding Parquet type for the given Greenplum column descriptor
-     *
-     * @param columnDescriptor contains Greenplum data type and column name
-     * @return the corresponding Parquet type
-     */
-    private DataType getTypeForColumnDescriptor(ColumnDescriptor columnDescriptor) {
-        String typeName = columnDescriptor.columnTypeName();
-        switch (typeName.toLowerCase()) {
-            case "boolean":
-                return BooleanType.BOOLEAN;
-            case "bytea":
-                return ByteType.BYTE;
-            case "bigint":
-            case "int8":
-                return LongType.LONG;
-            case "integer":
-            case "int4":
-                return IntegerType.INTEGER;
-            case "smallint":
-            case "int2":
-                return ShortType.SHORT;
-            case "real":
-            case "float":
-            case "float4":
-                return FloatType.FLOAT;
-            case "float8":
-                return DoubleType.DOUBLE;
-            case "date":
-                return DateType.DATE;
-            case "timestamp":
-                return TimestampType.TIMESTAMP;
-            case "text":
-            case "varchar":
-            case "bpchar":
-            case "numeric":             // Greenplum numeric type is mapped to string type now
-                return StringType.STRING;
-            default:
-                throw new UnsupportedOperationException("Unsupported data type: " + typeName);
-        }
-    }
-
-   /**
-     * Generate schema for all the supported types using column descriptors
-     *
-     * @param columns contains Greenplum data type and column name
-     * @return the generated parquet schema used for write
-     */
-    private StructType generateParquetSchema(List<ColumnDescriptor> columns) {
-        StructType schema = new StructType();
-        for (ColumnDescriptor column : columns) {
-            schema = schema.add(column.columnName(), getTypeForColumnDescriptor(column));
-            LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
-        }
-        return schema;
-    }
 
     private void createTransaction(String tablePath) {
         // Create a `Table` object with the given destination table path
@@ -265,7 +213,7 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
                         "pxf", /* engineInfo */
                         Operation.CREATE_TABLE);
 
-            tableSchema = generateParquetSchema(context.getTupleDescription());
+            tableSchema = DeltaUtilities.generateParquetSchema(context.getTupleDescription());
             if (!DeltaUtilities.isDeltaTable(tablePath)) {
                 // Set the schema of the new table on the transaction builder
                 txnBuilder = txnBuilder.withSchema(engine, tableSchema);

@@ -97,9 +97,13 @@ public class DeltaTableVectorizedResolver implements ReadVectorizedResolver, Wri
         int i = 0;
 
         for (ColumnDescriptor column : tupleDescription) {
-            Object value = extractValue(row, i);
-            fields.add(new OneField(column.getDataType().getOID(), value));
-            i++;
+            if (column.isProjected()) {
+                Object value = extractValue(row, i);
+                fields.add(new OneField(column.getDataType().getOID(), value));
+                i++;
+            } else {
+                fields.add(new OneField(column.getDataType().getOID(), null));
+            }
         }
 
         return fields;
