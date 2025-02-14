@@ -52,8 +52,15 @@ public class DeltaTableFragmenter extends BaseFragmenter {
                         if (file.isDirectory() && DeltaUtilities.isDeltaTable(file.getPath())) {
                             String partitionInfo = file.getName();
                             DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(file.getPath(), i++ % totalSegments, totalSegments, partitionInfo);
-                            fragments.add(new Fragment(context.getDataSource(), metadata, null));
-                            LOG.info("Adding fragment for partition: " + file.getPath());
+                            Fragment fragment = new Fragment(context.getDataSource(), metadata, null);
+                            // For multiple nodes, assign segment ID for fragments.
+                            if (context.getTotalSegments() > files.length) {
+                                int segmentId = getSegmentIdFromPath(file.getName());
+                                fragment.setSegmentId(segmentId);
+                                LOG.info("Assign fragment for: " + file.getPath() + " with segment id: " + segmentId);
+                            }
+                            fragments.add(fragment);
+                            LOG.info("Adding fragment for: " + file.getPath());
                         } else {
                             //throw exception
                             throw new RuntimeException("Invalid Delta Table path: " + file.getPath());
@@ -85,6 +92,13 @@ public class DeltaTableFragmenter extends BaseFragmenter {
             throw new RuntimeException("Error during fragmentation", e);
         }
         return fragments;
+    }
+
+    private int getSegmentIdFromPath(String path) {
+        // path name format is seg_<segment_id>
+        // remove prefix "seg_" and return segment_id
+        String segmentId = path.substring(4);
+        return Integer.parseInt(segmentId);
     }
 
     private Configuration initializeHadoopConfiguration() {
