@@ -64,7 +64,8 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
     private Row scanState ;
     private StructType tableSchema;
     private TransactionBuilder txnBuilder;
-    List<Row> dataActions = new ArrayList<>();
+    private List<FilteredColumnarBatch> filteredBatches = new ArrayList<>();
+    private List<Row> dataActions = new ArrayList<>();
     private Transaction txn;
     private boolean isParentPath = false;
     int batchSize = 1024;
@@ -334,35 +335,26 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
         }
     }
 
-     @Override
-    public boolean writeNextObject(OneRow oneRow) {
-        ColumnVector[] columns = (ColumnVector[]) oneRow.getData();
-        ColumnarBatch batch = new DefaultColumnarBatch(columns[0].getSize(), tableSchema, columns);
-        FilteredColumnarBatch filteredBatch = new FilteredColumnarBatch(batch, Optional.empty());
-        CloseableIterator<FilteredColumnarBatch> data = toCloseableIterator(Arrays.asList(filteredBatch).iterator());
-
-        // Get the transaction state
-        Row txnState = txn.getTransactionState(engine);
-        // First transform the logical data to physical data that needs to be written to the Parquet
-        // files
-        CloseableIterator<FilteredColumnarBatch> physicalData =
-                Transaction.transformLogicalData(
-                        engine,
-                        txnState,
-                        data,
-                        // partition values - as this table is unpartitioned, it should be empty
-                        Collections.emptyMap());
-
-        // Get the write context
-        DataWriteContext writeContext = Transaction.getWriteContext(
-                engine,
-                txnState,
-                // partition values - as this table is unpartitioned, it should be empty
-                Collections.emptyMap());
-
-
-        // Now write the physical data to Parquet files
+    private void writeDataToParquetFiles(CloseableIterator<FilteredColumnarBatch> data) {
         try {
+            // Get the transaction state
+            Row txnState = txn.getTransactionState(engine);
+            // First transform the logical data to physical data that needs to be written to the Parquet
+            // files
+            CloseableIterator<FilteredColumnarBatch> physicalData =
+                    Transaction.transformLogicalData(
+                            engine,
+                            txnState,
+                            data,
+                            // partition values - as this table is unpartitioned, it should be empty
+                            Collections.emptyMap());
+            // Get the write context
+            DataWriteContext writeContext = Transaction.getWriteContext(
+                    engine,
+                    txnState,
+                    // partition values - as this table is unpartitioned, it should be empty
+                    Collections.emptyMap());
+
             // Write the physical data to Parquet files
             CloseableIterator<DataFileStatus> dataFiles = engine.getParquetHandler()
                     .writeParquetFiles(
@@ -376,8 +368,20 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
                 dataActions.add(dataAction.next());
             }
         } catch (Exception e) {
-            LOG.log(Level.SEVERE, "Error writing next object", e);
-            return false;
+            LOG.log(Level.SEVERE, "Error writing data to Parquet files", e);
+        }
+    }
+
+
+    @Override
+    public boolean writeNextObject(OneRow oneRow) {
+        ColumnVector[] columns = (ColumnVector[]) oneRow.getData();
+        ColumnarBatch batch = new DefaultColumnarBatch(columns[0].getSize(), tableSchema, columns);
+        FilteredColumnarBatch filteredBatch = new FilteredColumnarBatch(batch, Optional.empty());
+        filteredBatches.add(filteredBatch);
+        if (filteredBatches.size() >= 10) {
+            writeDataToParquetFiles(toCloseableIterator(filteredBatches.iterator()));
+            filteredBatches.clear();
         }
 
         return true;
@@ -402,6 +406,10 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
 
     @Override
     public void closeForWrite() {
+        if (filteredBatches.size() > 0) {
+            writeDataToParquetFiles(toCloseableIterator(filteredBatches.iterator()));
+            filteredBatches.clear();
+        }
         commitTx();
         return;
     }
