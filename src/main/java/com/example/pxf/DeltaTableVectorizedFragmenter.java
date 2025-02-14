@@ -48,7 +48,7 @@ public class DeltaTableVectorizedFragmenter extends BaseFragmenter {
                             DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
                             Fragment fragment = new Fragment(context.getDataSource(), metadata, null);
                             // For multiple nodes, assign segment ID for fragments.
-                            if (context.getTotalSegments() > files.length) {
+                            if (context.getTotalSegments() >= files.length) {
                                 int segmentId = getSegmentIdFromPath(file.getName());
                                 fragment.setSegmentId(segmentId);
                                 LOG.info("Assign fragment for: " + file.getPath() + " with segment id: " + segmentId);
