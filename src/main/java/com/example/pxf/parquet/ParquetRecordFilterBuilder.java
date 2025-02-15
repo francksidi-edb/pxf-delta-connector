@@ -197,7 +197,7 @@ public class ParquetRecordFilterBuilder implements TreeVisitor {
         ColumnDescriptor columnDescriptor = columnDescriptors.get(columnIndexOperand.index());
         String filterColumnName = columnDescriptor.columnName();
         Type type = fields.get(filterColumnName);
-
+        LOG.info("process col " + filterColumnName + " with type " + type);
         // INT96 and FIXED_LEN_BYTE_ARRAY cannot be pushed down
         // for more details look at org.apache.parquet.filter2.dictionarylevel.DictionaryFilter#expandDictionary
         // where INT96 and FIXED_LEN_BYTE_ARRAY are not dictionary values
@@ -214,9 +214,9 @@ public class ParquetRecordFilterBuilder implements TreeVisitor {
                 break;
 
             case BINARY:
-                byte[] value = valueOperand.toString().getBytes();
+                // handle binary data and string data
                 simpleFilter = new Predicate(convertOperator(operator), 
-                        Arrays.asList(new Column(filterColumnName), Literal.ofBinary(value)));
+                        Arrays.asList(new Column(filterColumnName), Literal.ofString(valueOperand.toString())));
                 break;
 
             case BOOLEAN:
@@ -234,14 +234,10 @@ public class ParquetRecordFilterBuilder implements TreeVisitor {
                 simpleFilter = new Predicate(convertOperator(operator), 
                         Arrays.asList(new Column(filterColumnName), Literal.ofDouble(Double.parseDouble(valueOperand.toString()))));
                 break;
-            case FIXED_LEN_BYTE_ARRAY:
-                simpleFilter = new Predicate(convertOperator(operator), 
-                        Arrays.asList(new Column(filterColumnName), Literal.ofString(valueOperand.toString())));
-                break;
 
             default:
-                throw new UnsupportedOperationException(String.format("Column %s of type %s is not supported",
-                        type.getName(), type.asPrimitiveType().getPrimitiveTypeName()));
+                LOG.warn("Column type " + type.asPrimitiveType().getPrimitiveTypeName() + " is not supported for pushdown");
+                return;
         }
 
         filterQueue.push(simpleFilter);

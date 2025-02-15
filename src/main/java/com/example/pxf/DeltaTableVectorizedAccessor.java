@@ -128,7 +128,9 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
 
         recordFilter = DeltaUtilities.getFilterPredicate(context.getFilterString(), readSchema, context.getTupleDescription());
         LOG.info("Filter predicate: " + recordFilter);
-        scanBuilder = scanBuilder.withFilter(engine, recordFilter);
+        if (recordFilter != null) {
+            scanBuilder = scanBuilder.withFilter(engine, recordFilter);
+        }
         scan = scanBuilder.build();
         scanState = scan.getScanState(engine);
         scanFileIter = scan.getScanFiles(engine);

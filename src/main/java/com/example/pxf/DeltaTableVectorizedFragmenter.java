@@ -77,7 +77,6 @@ public class DeltaTableVectorizedFragmenter extends BaseFragmenter {
                         String partitionInfo = extractPartitionInfo(file.getPath(), partitionColumns);
                         DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
                         Fragment fragment = new Fragment(context.getDataSource(), metadata, null);
-                        fragment.setSegmentId(0);
                         fragments.add(fragment);
                     });
                 } else {
