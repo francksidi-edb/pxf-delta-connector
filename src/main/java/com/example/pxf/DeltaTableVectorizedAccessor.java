@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Collections;
 import java.util.Optional;
 
@@ -29,6 +31,7 @@ import io.delta.kernel.engine.Engine;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
+
 import org.greenplum.pxf.api.model.BasePlugin;
 import org.greenplum.pxf.api.utilities.ColumnDescriptor;
 import org.greenplum.pxf.api.OneRow;
@@ -64,6 +67,7 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
     private DeltaVectorizedFragmentMetadata fragmentMeta;
     private Row scanState ;
     private StructType tableSchema;
+    private Predicate recordFilter;
     private TransactionBuilder txnBuilder;
     private List<FilteredColumnarBatch> filteredBatches = new ArrayList<>();
     private List<Row> dataActions = new ArrayList<>();
@@ -118,9 +122,13 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
                 LOG.info("Invalid partition filter: " + partitionInfo);
             }
         }
+        // handle column projection
         StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription());
         scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
 
+        recordFilter = DeltaUtilities.getFilterPredicate(context.getFilterString(), readSchema, context.getTupleDescription());
+        LOG.info("Filter predicate: " + recordFilter);
+        scanBuilder = scanBuilder.withFilter(engine, recordFilter);
         scan = scanBuilder.build();
         scanState = scan.getScanState(engine);
         scanFileIter = scan.getScanFiles(engine);

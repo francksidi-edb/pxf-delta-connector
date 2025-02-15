@@ -76,14 +76,16 @@ public class DeltaTableVectorizedFragmenter extends BaseFragmenter {
                     snapshot.getAllFiles().forEach(file -> {
                         String partitionInfo = extractPartitionInfo(file.getPath(), partitionColumns);
                         DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
-                        fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                        Fragment fragment = new Fragment(context.getDataSource(), metadata, null);
+                        fragment.setSegmentId(0);
+                        fragments.add(fragment);
                     });
                 } else {
                     LOG.info("Fragmenting based on file splits...");
                     snapshot.getAllFiles().forEach(file -> {
                         DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), null);
-                        fragments.add(new Fragment(context.getDataSource(), metadata, null));
-                    });
+                        Fragment fragment = new Fragment(context.getDataSource(), metadata, null);
+                        fragments.add(fragment);                    });
                 }
         }
         } catch (Exception e) {

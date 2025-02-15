@@ -83,6 +83,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             snapshot = deltaTable.getLatestSnapshot(engine);
             ScanBuilder scanBuilder = snapshot.getScanBuilder(engine);
             StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription());
+            readSchema.fields().forEach(f -> LOG.info("Field: " + f.getName() + " Type: " + f.getDataType()));
             scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
             scan = scanBuilder.build();
 
