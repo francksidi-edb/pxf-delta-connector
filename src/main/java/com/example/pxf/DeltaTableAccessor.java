@@ -30,6 +30,7 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.defaults.internal.data.DefaultColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.utils.*;
+import io.delta.kernel.expressions.*;
 
 import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 import static io.delta.kernel.internal.util.Utils.toCloseableIterator;
@@ -46,6 +47,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private CloseableIterator<Row> scanFileRows;
     private DeltaFragmentMetadata fragmentMeta;
     private Row scanState ;
+    private Predicate recordFilter;
     private StructType tableSchema;
     private TransactionBuilder txnBuilder;
     private List<FilteredColumnarBatch> filteredBatches = new ArrayList<>();
@@ -82,9 +84,14 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
             Table deltaTable = Table.forPath(engine, tablePath);
             snapshot = deltaTable.getLatestSnapshot(engine);
             ScanBuilder scanBuilder = snapshot.getScanBuilder(engine);
-            StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription());
+            StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription(), snapshot.getPartitionColumnNames(engine));
             readSchema.fields().forEach(f -> LOG.info("Field: " + f.getName() + " Type: " + f.getDataType()));
             scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
+            recordFilter = DeltaUtilities.getFilterPredicate(context.getFilterString(), readSchema, context.getTupleDescription());
+            LOG.info("Filter predicate: " + recordFilter);
+            if (recordFilter != null) {
+                scanBuilder = scanBuilder.withFilter(engine, recordFilter);
+            }
             scan = scanBuilder.build();
 
             scanState = scan.getScanState(engine);
@@ -161,6 +168,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         try {
             if (rowIterator != null && rowIterator.hasNext()) {
                 Row row = rowIterator.next();
+                LOG.info("Reading next object: " + extractRowValues(row));
                 return new OneRow(null, extractRowValues(row));
             } else if (readNextFiltedData()) {
                 return readNextObject(); // Recursively process the next DataRows

@@ -27,7 +27,7 @@ import com.example.pxf.parquet.ParquetRecordFilterBuilder;
 import org.greenplum.pxf.api.filter.TreeTraverser;
 
 public class DeltaUtilities {
-    private static final Logger LOG = Logger.getLogger(DeltaTableFragmenter.class.getName());
+    private static final Logger LOG = Logger.getLogger(DeltaUtilities.class.getName());
     private static final TreeTraverser TRAVERSER = new TreeTraverser();
     private static final TreeVisitor IN_OPERATOR_TRANSFORMER = new InOperatorTransformer();
 
@@ -187,9 +187,12 @@ public class DeltaUtilities {
         }
     }
 
-    public static StructType getReadSchema(List<ColumnDescriptor> columns) {
+    public static StructType getReadSchema(List<ColumnDescriptor> columns, List<String> partitionColumns) {
         StructType schema = new StructType();
         for (ColumnDescriptor column : columns) {
+            if (partitionColumns.contains(column.columnName())) {
+                column.setProjected(true);
+            }
             if (column.isProjected()) { // Skip columns that are not projected
                 schema = schema.add(column.columnName(), getTypeForColumnDescriptor(column));
                 LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
@@ -207,7 +210,7 @@ public class DeltaUtilities {
         StructType schema = new StructType();
         for (ColumnDescriptor column : columns) {
             schema = schema.add(column.columnName(), getTypeForColumnDescriptor(column));
-            LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
+            LOG.info("Added parquet column: " + column.columnName() + " with type: " + column.columnTypeName());
         }
         return schema;
     }

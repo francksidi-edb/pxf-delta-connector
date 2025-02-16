@@ -107,30 +107,33 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
         Table deltaTable = Table.forPath(engine, tablePath);
         snapshot = deltaTable.getLatestSnapshot(engine);
         ScanBuilder scanBuilder = snapshot.getScanBuilder(engine);
+        StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription(), snapshot.getPartitionColumnNames(engine));
 
         // Extract partition filter from fragment metadata
+        Predicate partitionPredicate = null;
         if (partitionInfo == null || partitionInfo.isEmpty()) {
             LOG.fine("Partition filter is empty");
         } else {
             String[] filterStrs = partitionInfo.split("=");
             if (filterStrs.length == 2) {
-                Predicate filter = new Predicate(
-                    "=",
-                    Arrays.asList(new Column(filterStrs[0]), Literal.ofString(filterStrs[1])));
-                scanBuilder = scanBuilder.withFilter(engine, filter);
+                partitionPredicate = DeltaUtilities.getPartitionPredicate(filterStrs[0], filterStrs[1], readSchema);
             } else {
                 LOG.info("Invalid partition filter: " + partitionInfo);
             }
         }
         // handle column projection
-        StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription());
         scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
 
         recordFilter = DeltaUtilities.getFilterPredicate(context.getFilterString(), readSchema, context.getTupleDescription());
-        LOG.info("Filter predicate: " + recordFilter);
+        // set filter as recordFilter if it is not null
         if (recordFilter != null) {
+            LOG.info("Filter predicate: " + recordFilter);
             scanBuilder = scanBuilder.withFilter(engine, recordFilter);
+        } else if (partitionPredicate != null) {
+            LOG.info("Partition filter predicate: " + partitionPredicate);
+            scanBuilder = scanBuilder.withFilter(engine, partitionPredicate);
         }
+
         scan = scanBuilder.build();
         scanState = scan.getScanState(engine);
         scanFileIter = scan.getScanFiles(engine);
