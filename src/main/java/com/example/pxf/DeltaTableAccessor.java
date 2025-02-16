@@ -54,6 +54,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private List<Row> dataActions = new ArrayList<>();
     private Transaction txn;
     private boolean isParentPath = false;
+    private int rowCounter = 0;
 
     @Override
     public void afterPropertiesSet() {
@@ -136,7 +137,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
                 engine.getParquetHandler().readParquetFiles(
                   singletonCloseableIterator(fileStatus),
                   physicalReadSchema,
-                  Optional.empty() /* optional predicate the connector can apply to filter data from the reader */
+                  (recordFilter == null) ? Optional.empty() : Optional.of(recordFilter)  /* optional predicate the connector can apply to filter data from the reader */
                 );
                 transformedData = Scan.transformPhysicalData(engine, scanState, scanFileRow, physicalDataIter);
                 return readNextFiltedData();
@@ -168,7 +169,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         try {
             if (rowIterator != null && rowIterator.hasNext()) {
                 Row row = rowIterator.next();
-                LOG.info("Reading next object: " + extractRowValues(row));
+                rowCounter++;
                 return new OneRow(null, extractRowValues(row));
             } else if (readNextFiltedData()) {
                 return readNextObject(); // Recursively process the next DataRows
@@ -181,7 +182,8 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
 
     @Override
     public void closeForRead() {
-        LOG.info("Closing DeltaTableAccessor.");
+        LOG.info("Closing DeltaTableAccessor. Total rows read: " + rowCounter);
+        rowCounter = 0;
         closeCurrentRowIterator();
     }
 

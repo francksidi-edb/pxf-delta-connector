@@ -78,15 +78,10 @@ public class DeltaTableVectorizedResolver implements ReadVectorizedResolver, Wri
 
         LOG.fine(String.format("Processing batch of %d rows", records.size()));
 
-        final Instant start = Instant.now();
-
         List<List<OneField>> resolvedBatch = new ArrayList<>(records.size());
         for (Row record : records) {
             resolvedBatch.add(processRecord(record));
         }
-
-        final long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
-        LOG.info(String.format("Processed batch of %d rows in %d milliseconds", records.size(), elapsedMillis));
 
         return resolvedBatch;
     }

@@ -73,7 +73,8 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
     private List<Row> dataActions = new ArrayList<>();
     private Transaction txn;
     private boolean isParentPath = false;
-    int batchSize = 1024;
+    private int batchSize = 1024;
+    private int batchNum = 0;
 
      @Override
     public void afterPropertiesSet() {
@@ -178,7 +179,7 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
                 engine.getParquetHandler().readParquetFiles(
                   singletonCloseableIterator(fileStatus),
                   physicalReadSchema,
-                  Optional.empty() /* optional predicate the connector can apply to filter data from the reader */
+                  (recordFilter == null) ? Optional.empty() : Optional.of(recordFilter) /* optional predicate the connector can apply to filter data from the reader */
                 );
                 transformedData = Scan.transformPhysicalData(engine, scanState, scanFileRow, physicalDataIter);
                 return readNextFiltedData();
@@ -210,41 +211,8 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
         if (rowIterator != null) {
             rowIterator.close();
         }
-        LOG.info("DeltaTableVectorizedAccessor closed.");
-    }
-
-    private void createTransaction(String tablePath) {
-        // Create a `Table` object with the given destination table path
-        Table table = Table.forPath(engine, tablePath);
-
-        // Create a transaction builder to build the transaction
-        try {
-            LOG.info("Creating transaction for table: " + tablePath);
-            txnBuilder =
-                table.createTransactionBuilder(
-                        engine,
-                        "pxf", /* engineInfo */
-                        Operation.CREATE_TABLE);
-
-            tableSchema = DeltaUtilities.generateParquetSchema(context.getTupleDescription());
-            if (!DeltaUtilities.isDeltaTable(tablePath)) {
-                // Set the schema of the new table on the transaction builder
-                txnBuilder = txnBuilder.withSchema(engine, tableSchema);
-            }
-            // Build the transaction
-            txn = txnBuilder.build(engine);
-            //LOG.info("thread name: " + Thread.currentThread().getName() + " txn version: " + context.getSegmentId());
-        } catch (Exception e) {
-            LOG.log(Level.SEVERE, "Error creating transaction", e);
-        }
-    }
-
-    @Override
-    public boolean openForWrite() {
-        String tablePath = String.format("%s/%s_%d", StringUtils.removeEnd(context.getDataSource(), "/"), "seg", context.getSegmentId());
-        LOG.info("table path: " + tablePath);
-        createTransaction(tablePath);
-        return true;
+        LOG.info("DeltaTableVectorizedAccessor closed. Total batches: " + batchNum);
+        batchNum = 0;
     }
 
     @Override
@@ -260,7 +228,8 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
 
             if (!batch.isEmpty()) {
                 final long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
-                LOG.info(String.format("Read batch of %d rows in %d milliseconds", batch.size(), elapsedMillis));
+                LOG.fine(String.format("Read batch of %d rows in %d milliseconds", batch.size(), elapsedMillis));
+                batchNum++;
                 return new OneRow(null, batch); // Return the batch
             }
 
@@ -333,6 +302,39 @@ public class DeltaTableVectorizedAccessor extends BasePlugin implements Accessor
         }
     }
 
+    private void createTransaction(String tablePath) {
+        // Create a `Table` object with the given destination table path
+        Table table = Table.forPath(engine, tablePath);
+
+        // Create a transaction builder to build the transaction
+        try {
+            LOG.info("Creating transaction for table: " + tablePath);
+            txnBuilder =
+                table.createTransactionBuilder(
+                        engine,
+                        "pxf", /* engineInfo */
+                        Operation.CREATE_TABLE);
+
+            tableSchema = DeltaUtilities.generateParquetSchema(context.getTupleDescription());
+            if (!DeltaUtilities.isDeltaTable(tablePath)) {
+                // Set the schema of the new table on the transaction builder
+                txnBuilder = txnBuilder.withSchema(engine, tableSchema);
+            }
+            // Build the transaction
+            txn = txnBuilder.build(engine);
+            //LOG.info("thread name: " + Thread.currentThread().getName() + " txn version: " + context.getSegmentId());
+        } catch (Exception e) {
+            LOG.log(Level.SEVERE, "Error creating transaction", e);
+        }
+    }
+
+    @Override
+    public boolean openForWrite() {
+        String tablePath = String.format("%s/%s_%d", StringUtils.removeEnd(context.getDataSource(), "/"), "seg", context.getSegmentId());
+        LOG.info("table path: " + tablePath);
+        createTransaction(tablePath);
+        return true;
+    }
 
     @Override
     public boolean writeNextObject(OneRow oneRow) {
