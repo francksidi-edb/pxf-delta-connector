@@ -8,7 +8,9 @@ import org.apache.hadoop.fs.Path;
 import org.greenplum.pxf.api.model.BaseFragmenter;
 import org.greenplum.pxf.api.model.Fragment;
 import com.example.pxf.partitioning.DeltaVectorizedFragmentMetadata;
+import com.example.pxf.DeltaUtilities;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
@@ -18,20 +20,14 @@ public class DeltaTableVectorizedFragmenter extends BaseFragmenter {
 
     private static final Logger LOG = Logger.getLogger(DeltaTableFragmenter.class.getName());
     private DeltaLog deltaLog;
-    private StructType schema;
+    private boolean isParentPath = false;
 
     @Override
     public void afterPropertiesSet() {
         try {
             String deltaTablePath = context.getDataSource();
             LOG.info("Initializing DeltaLog for table path: " + deltaTablePath);
-
-            Configuration hadoopConf = initializeHadoopConfiguration();
-            deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-            Snapshot snapshot = deltaLog.snapshot();
-            schema = snapshot.getMetadata().getSchema();
-
-            LOG.info("Schema initialized: " + schema);
+            isParentPath = DeltaUtilities.isParentPath(deltaTablePath);
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Failed to initialize DeltaLog", e);
             throw new RuntimeException("Failed to initialize DeltaLog", e);
@@ -42,28 +38,52 @@ public class DeltaTableVectorizedFragmenter extends BaseFragmenter {
     public List<Fragment> getFragments() {
         List<Fragment> fragments = new ArrayList<>();
         try {
-            Snapshot snapshot = deltaLog.snapshot();
-
-            // Check if the table has partitions
-            if (!snapshot.getMetadata().getPartitionColumns().isEmpty()) {
-                LOG.info("Fragmenting based on partitions...");
-                List<String> partitionColumns = snapshot.getMetadata().getPartitionColumns();
-                snapshot.getAllFiles().forEach(file -> {
-                    String partitionInfo = extractPartitionInfo(file.getPath(), partitionColumns);
-                    DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
-                    fragments.add(new Fragment(context.getDataSource(), metadata, null));
-                });
+            if (isParentPath) {
+                // Fragment based on the parent path
+                File[] files = new File(context.getDataSource()).listFiles();
+                if (files != null) {
+                    for (File file : files) {
+                        if (file.isDirectory() && DeltaUtilities.isDeltaTable(file.getPath())) {
+                            String partitionInfo = file.getName();
+                            DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
+                            fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                            LOG.info("Adding fragment for partition: " + file.getPath());
+                        } else {
+                            //throw exception
+                            throw new RuntimeException("Invalid Delta Table path: " + file.getPath());
+                        }
+                    }
+                }
             } else {
-                LOG.info("Fragmenting based on file splits...");
-                snapshot.getAllFiles().forEach(file -> {
-                    DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), null);
-                    fragments.add(new Fragment(context.getDataSource(), metadata, null));
-                });
-            }
+                // Fragment based on the table path
+                String deltaTablePath = context.getDataSource();
+                LOG.info("Initializing DeltaLog for table path: " + deltaTablePath);
+                Configuration hadoopConf = initializeHadoopConfiguration();
+                deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
+                Snapshot snapshot = deltaLog.snapshot();
+
+                // Check if the table has partitions
+                if (!snapshot.getMetadata().getPartitionColumns().isEmpty()) {
+                    LOG.info("Fragmenting based on partitions...");
+                    List<String> partitionColumns = snapshot.getMetadata().getPartitionColumns();
+                    snapshot.getAllFiles().forEach(file -> {
+                        String partitionInfo = extractPartitionInfo(file.getPath(), partitionColumns);
+                        DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), partitionInfo);
+                        fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                    });
+                } else {
+                    LOG.info("Fragmenting based on file splits...");
+                    snapshot.getAllFiles().forEach(file -> {
+                        DeltaVectorizedFragmentMetadata metadata = new DeltaVectorizedFragmentMetadata(file.getPath(), null);
+                        fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                    });
+                }
+        }
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error during fragmentation", e);
             throw new RuntimeException("Error during fragmentation", e);
         }
+        LOG.info("Total fragments created: " + fragments.size());
         return fragments;
     }
 

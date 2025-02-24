@@ -2,13 +2,13 @@ package com.example.pxf;
 import io.delta.standalone.DeltaLog;
 import io.delta.standalone.Snapshot;
 import io.delta.standalone.actions.AddFile;
-import io.delta.standalone.types.StructType;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.greenplum.pxf.api.model.BaseFragmenter;
 import org.greenplum.pxf.api.model.Fragment;
 import com.example.pxf.partitioning.DeltaFragmentMetadata;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
@@ -18,20 +18,14 @@ public class DeltaTableFragmenter extends BaseFragmenter {
 
     private static final Logger LOG = Logger.getLogger(DeltaTableFragmenter.class.getName());
     private DeltaLog deltaLog;
-    private StructType schema;
+    private boolean isParentPath = false;
 
     @Override
     public void afterPropertiesSet() {
         try {
             String deltaTablePath = context.getDataSource();
             LOG.info("Initializing DeltaLog for table path: " + deltaTablePath);
-
-            Configuration hadoopConf = initializeHadoopConfiguration();
-            deltaLog = DeltaLog.forTable(hadoopConf, new Path(deltaTablePath));
-            Snapshot snapshot = deltaLog.snapshot();
-            schema = snapshot.getMetadata().getSchema();
-
-            LOG.info("Schema initialized: " + schema);
+            isParentPath = DeltaUtilities.isParentPath(deltaTablePath);
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Failed to initialize DeltaLog", e);
             throw new RuntimeException("Failed to initialize DeltaLog", e);
@@ -42,10 +36,6 @@ public class DeltaTableFragmenter extends BaseFragmenter {
     public List<Fragment> getFragments() {
         List<Fragment> fragments = new ArrayList<>();
         try {
-            Snapshot snapshot = deltaLog.snapshot();
-            List<AddFile> allFiles = snapshot.getAllFiles();
-            int totalFiles = allFiles.size();
-
             // Get total segments from PXF context or default to 8
             int totalSegments = context.getTotalSegments();
             if (totalSegments == 0) {
@@ -53,21 +43,43 @@ public class DeltaTableFragmenter extends BaseFragmenter {
                 totalSegments = 8;
             }
 
-	    LOG.info("Starting fragment assignment.");
-	    LOG.info("Total files available: " + totalFiles);
-            LOG.info("Total segments configured: " + totalSegments);
-	    for (int i = 0; i < totalFiles; i++) {
-		AddFile file = allFiles.get(i);
-    		String filePath = file.getPath();
-    		int assignedSegment = i % totalSegments;
-    		LOG.info("Assigning file: " + filePath + " to segment: " + assignedSegment);
-    		DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(filePath, assignedSegment, totalSegments, null);
-    		fragments.add(new Fragment(context.getDataSource(), metadata, null));
-	    }
+            if (isParentPath) {
+                // Fragment based on the parent path
+                File[] files = new File(context.getDataSource()).listFiles();
+                if (files != null) {
+                    int i = 0;
+                    for (File file : files) {
+                        if (file.isDirectory() && DeltaUtilities.isDeltaTable(file.getPath())) {
+                            String partitionInfo = file.getName();
+                            DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(file.getPath(), i++ % totalSegments, totalSegments, partitionInfo);
+                            fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                            LOG.info("Adding fragment for partition: " + file.getPath());
+                        } else {
+                            //throw exception
+                            throw new RuntimeException("Invalid Delta Table path: " + file.getPath());
+                        }
+                    }
+                }
+            } else {
+                Configuration hadoopConf = initializeHadoopConfiguration();
+                deltaLog = DeltaLog.forTable(hadoopConf, new Path(context.getDataSource()));
+                Snapshot snapshot = deltaLog.snapshot();
 
-	    LOG.info("Completed fragment assignment.");
-            LOG.info("Total fragments created: " + fragments.size());
+                List<AddFile> allFiles = snapshot.getAllFiles();
+                int totalFiles = allFiles.size();
+                LOG.info("Total files available: " + totalFiles);
+                LOG.info("Total segments configured: " + totalSegments);
+                for (int i = 0; i < totalFiles; i++) {
+                    AddFile file = allFiles.get(i);
+                    String filePath = file.getPath();
+                    int assignedSegment = i % totalSegments;
+                    LOG.info("Assigning file: " + filePath + " to segment: " + assignedSegment);
+                    DeltaFragmentMetadata metadata = new DeltaFragmentMetadata(filePath, assignedSegment, totalSegments, null);
+                    fragments.add(new Fragment(context.getDataSource(), metadata, null));
+                }
 
+                LOG.info("Total fragments created: " + fragments.size());
+            }
         } catch (Exception e) {
             LOG.log(Level.SEVERE, "Error during fragmentation", e);
             throw new RuntimeException("Error during fragmentation", e);
