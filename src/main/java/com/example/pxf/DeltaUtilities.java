@@ -2,11 +2,13 @@ package com.example.pxf;
 
 import java.io.File;
 import java.util.logging.Logger;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import io.delta.kernel.types.*;
+import io.delta.standalone.expressions.EqualTo;
 import io.delta.kernel.expressions.*;
 
 import org.greenplum.pxf.api.filter.FilterParser;
@@ -208,5 +210,46 @@ public class DeltaUtilities {
             LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
         }
         return schema;
+    }
+
+    public static Predicate getPartitionPredicate(String colName, String colValue, StructType readSchema) {
+        // Get a map of the column name to Types for the given schema
+        Map<String, Type> originalFieldsMap = getOriginalFieldsMap(readSchema);
+        Type colType = originalFieldsMap.get(colName);
+        if (colType == null) {
+            throw new IllegalArgumentException("Column " + colName + " not found in the schema");
+        }
+        switch (colType.asPrimitiveType().getPrimitiveTypeName()) {
+            case BOOLEAN:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofBoolean(colValue.equals("true"))));
+            case INT32:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofInt(Integer.valueOf(colValue))));
+            case INT64:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofLong(Long.valueOf(colValue))));
+            case FLOAT:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofFloat(Float.valueOf(colValue))));
+            case DOUBLE:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofDouble(Double.valueOf(colValue))));
+            case BINARY:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofString(colValue)));
+            case FIXED_LEN_BYTE_ARRAY:
+                return new Predicate(
+                    "=",
+                    Arrays.asList(new Column(colName), Literal.ofString(colValue)));
+            default:
+                throw new UnsupportedOperationException("Unsupported data type: " + colType.asPrimitiveType().getPrimitiveTypeName());
+        }
     }
 }
