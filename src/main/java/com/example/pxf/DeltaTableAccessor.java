@@ -30,6 +30,7 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.defaults.internal.data.DefaultColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.utils.*;
+import io.delta.kernel.expressions.*;
 
 import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 import static io.delta.kernel.internal.util.Utils.toCloseableIterator;
@@ -46,12 +47,14 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
     private CloseableIterator<Row> scanFileRows;
     private DeltaFragmentMetadata fragmentMeta;
     private Row scanState ;
+    private Predicate recordFilter;
     private StructType tableSchema;
     private TransactionBuilder txnBuilder;
     private List<FilteredColumnarBatch> filteredBatches = new ArrayList<>();
     private List<Row> dataActions = new ArrayList<>();
     private Transaction txn;
     private boolean isParentPath = false;
+    private int rowCounter = 0;
 
     @Override
     public void afterPropertiesSet() {
@@ -78,9 +81,19 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
                 }
             }
             LOG.info("Opening DeltaLog for table path: " + tablePath);
+
             Table deltaTable = Table.forPath(engine, tablePath);
             snapshot = deltaTable.getLatestSnapshot(engine);
-            scan = snapshot.getScanBuilder(engine).build();
+            ScanBuilder scanBuilder = snapshot.getScanBuilder(engine);
+            StructType readSchema = DeltaUtilities.getReadSchema(context.getTupleDescription(), snapshot.getPartitionColumnNames(engine));
+            readSchema.fields().forEach(f -> LOG.info("Field: " + f.getName() + " Type: " + f.getDataType()));
+            scanBuilder = scanBuilder.withReadSchema(engine, readSchema);
+            recordFilter = DeltaUtilities.getFilterPredicate(context.getFilterString(), readSchema, context.getTupleDescription());
+            LOG.info("Filter predicate: " + recordFilter);
+            if (recordFilter != null) {
+                scanBuilder = scanBuilder.withFilter(engine, recordFilter);
+            }
+            scan = scanBuilder.build();
 
             scanState = scan.getScanState(engine);
             scanFileIter = scan.getScanFiles(engine);
@@ -124,7 +137,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
                 engine.getParquetHandler().readParquetFiles(
                   singletonCloseableIterator(fileStatus),
                   physicalReadSchema,
-                  Optional.empty() /* optional predicate the connector can apply to filter data from the reader */
+                  (recordFilter == null) ? Optional.empty() : Optional.of(recordFilter)  /* optional predicate the connector can apply to filter data from the reader */
                 );
                 transformedData = Scan.transformPhysicalData(engine, scanState, scanFileRow, physicalDataIter);
                 return readNextFiltedData();
@@ -156,6 +169,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         try {
             if (rowIterator != null && rowIterator.hasNext()) {
                 Row row = rowIterator.next();
+                rowCounter++;
                 return new OneRow(null, extractRowValues(row));
             } else if (readNextFiltedData()) {
                 return readNextObject(); // Recursively process the next DataRows
@@ -168,7 +182,8 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
 
     @Override
     public void closeForRead() {
-        LOG.info("Closing DeltaTableAccessor.");
+        LOG.info("Closing DeltaTableAccessor. Total rows read: " + rowCounter);
+        rowCounter = 0;
         closeCurrentRowIterator();
     }
 
@@ -197,7 +212,7 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
                         "pxf", /* engineInfo */
                         Operation.CREATE_TABLE);
 
-            tableSchema = generateParquetSchema(context.getTupleDescription());
+            tableSchema = DeltaUtilities.generateParquetSchema(context.getTupleDescription());
             if (!DeltaUtilities.isDeltaTable(tablePath)) {
                 // Set the schema of the NEW table on the transaction builder
                 txnBuilder = txnBuilder.withSchema(engine, tableSchema);
@@ -217,63 +232,6 @@ public class DeltaTableAccessor extends BasePlugin implements org.greenplum.pxf.
         createTransaction(tablePath);
 
         return true;
-    }
-
-    /**
-     * Generate schema for all the supported types using column descriptors
-     *
-     * @param columns contains Greenplum data type and column name
-     * @return the generated parquet schema used for write
-     */
-    private StructType generateParquetSchema(List<ColumnDescriptor> columns) {
-        StructType schema = new StructType();
-        for (ColumnDescriptor column : columns) {
-            schema = schema.add(column.columnName(), getTypeForColumnDescriptor(column));
-            LOG.info("Added column: " + column.columnName() + " with type: " + column.columnTypeName());
-        }
-        return schema;
-    }
-
-    /**
-     * Get the corresponding Parquet type for the given Greenplum column descriptor
-     *
-     * @param columnDescriptor contains Greenplum data type and column name
-     * @return the corresponding Parquet type
-     */
-    private DataType getTypeForColumnDescriptor(ColumnDescriptor columnDescriptor) {
-        String typeName = columnDescriptor.columnTypeName();
-        switch (typeName.toLowerCase()) {
-            case "boolean":
-                return BooleanType.BOOLEAN;
-            case "bytea":
-                return ByteType.BYTE;
-            case "bigint":
-            case "int8":
-                return LongType.LONG;
-            case "integer":
-            case "int4":
-                return IntegerType.INTEGER;
-            case "smallint":
-            case "int2":
-                return ShortType.SHORT;
-            case "real":
-            case "float":
-            case "float4":
-                return FloatType.FLOAT;
-            case "float8":
-                return DoubleType.DOUBLE;
-            case "date":
-                return DateType.DATE;
-            case "timestamp":
-                return TimestampType.TIMESTAMP;
-            case "text":
-            case "varchar":
-            case "bpchar":
-            case "numeric":             // Greenplum numeric type is mapped to string type now
-                return StringType.STRING;
-            default:
-                throw new UnsupportedOperationException("Unsupported data type: " + typeName);
-        }
     }
 
     private void verifyCommitSuccess(String tablePath, TransactionCommitResult result) {

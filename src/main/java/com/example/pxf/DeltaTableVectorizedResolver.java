@@ -78,15 +78,10 @@ public class DeltaTableVectorizedResolver implements ReadVectorizedResolver, Wri
 
         LOG.fine(String.format("Processing batch of %d rows", records.size()));
 
-        final Instant start = Instant.now();
-
         List<List<OneField>> resolvedBatch = new ArrayList<>(records.size());
         for (Row record : records) {
             resolvedBatch.add(processRecord(record));
         }
-
-        final long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
-        LOG.info(String.format("Processed batch of %d rows in %d milliseconds", records.size(), elapsedMillis));
 
         return resolvedBatch;
     }
@@ -97,9 +92,13 @@ public class DeltaTableVectorizedResolver implements ReadVectorizedResolver, Wri
         int i = 0;
 
         for (ColumnDescriptor column : tupleDescription) {
-            Object value = extractValue(row, i);
-            fields.add(new OneField(column.getDataType().getOID(), value));
-            i++;
+            if (column.isProjected()) {
+                Object value = extractValue(row, i);
+                fields.add(new OneField(column.getDataType().getOID(), value));
+                i++;
+            } else {
+                fields.add(new OneField(column.getDataType().getOID(), null));
+            }
         }
 
         return fields;

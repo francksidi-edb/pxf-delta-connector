@@ -139,14 +139,13 @@ public List<OneField> getFields(OneRow row) {
     // Extract fields based on the schema
     List<OneField> fields = new ArrayList<>();
     for (ColumnDescriptor column : context.getTupleDescription()) {
-        String columnName = column.columnName();
-        Object value = extractValue(record, columnName, schema);
-
-        OneField oneField = new OneField();
-        oneField.type = column.getDataType().getOID();
-        oneField.val = value;
-
-        fields.add(oneField);
+        if (column.isProjected()) {
+            String columnName = column.columnName();
+            Object value = extractValue(record, columnName, schema);
+            fields.add(new OneField(column.getDataType().getOID(), value));
+        } else {
+            fields.add(new OneField(column.getDataType().getOID(), null));
+        }
     }
 
     return fields;
